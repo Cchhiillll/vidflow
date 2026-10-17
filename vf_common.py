@@ -8,6 +8,9 @@ PROXY = os.environ.get("VIDFLOW_PROXY", "http://127.0.0.1:10819")
 TEXT_MODEL = os.environ.get("VIDFLOW_TEXT_MODEL", "gemini-3.8-flash-high")
 IMAGE_MODEL = os.environ.get("VIDFLOW_IMAGE_MODEL", "gpt-image-2.5")   # gpt 出图额度冷却时可临时换 grok-imagine-image-2.0（10-18 实测走 /images/edits 能照参考图画）
 VIDEO_MODEL = "grok-imagine-video-1.5"
+# 出图可临时换到别的中转（OpenAI 兼容）：VIDFLOW_IMAGE_BASE=https://portal.modelverseapi.com/v1 VIDFLOW_IMAGE_MODEL=gpt-image-2，
+# 密钥放 ~/.config/vidflow/image_api.key（只有一行）；不设就走 CPA。
+IMAGE_BASE = os.environ.get("VIDFLOW_IMAGE_BASE", CPA)
 W, H = 720, 1280            # 成片规格：9:16 竖屏
 STAGES = ["story", "screenplay", "script", "cast", "voices", "boards", "voice", "clips", "sync", "mix", "qc"]
 
@@ -118,6 +121,12 @@ def _png(path, side=1536):
     b = io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
 
 
+def image_key():
+    if IMAGE_BASE == CPA:
+        return key()
+    return open(f"{HOME}/.config/vidflow/image_api.key", encoding="utf-8").read().strip()
+
+
 def gen_image(prompt, refs, dest, size="1024x1536"):
     """有参考图时走 /images/edits（multipart + input_fidelity=high）——10-17 实测：/images/generations 的 images/image 字段、
     grok 的 image_urls 都会被静默忽略，画出来的是无关的人；只有 edits 真正照参考图画。"""
@@ -132,12 +141,21 @@ def gen_image(prompt, refs, dest, size="1024x1536"):
         def go():
             body, b = _multipart({"model": IMAGE_MODEL, "prompt": prompt, "size": size, "input_fidelity": "high", "n": "1"},
                                  [("image[]", f"ref{i}.png", _png(p)) for i, p in enumerate(refs[:5])])
-            req = urllib.request.Request(f"{CPA}/images/edits", data=body, headers={
-                "Authorization": "Bearer " + key(), "User-Agent": "curl/7.88.1", "Content-Type": f"multipart/form-data; boundary={b}"})
+            req = urllib.request.Request(f"{IMAGE_BASE}/images/edits", data=body, headers={
+                "Authorization": "Bearer " + image_key(), "User-Agent": "curl/7.88.1", "Content-Type": f"multipart/form-data; boundary={b}"})
             with _OP.open(req, timeout=400) as r:
                 return save(json.loads(r.read()))
         return retry(go, what="照参考图生图")
-    return retry(lambda: save(http("POST", f"{CPA}/images/generations", {"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size}, 300)), what="生图")
+    if IMAGE_BASE == CPA:
+        return retry(lambda: save(http("POST", f"{CPA}/images/generations", {"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size}, 300)), what="生图")
+
+    def gen():
+        req = urllib.request.Request(f"{IMAGE_BASE}/images/generations", method="POST",
+                                     data=json.dumps({"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size}).encode(),
+                                     headers={"Authorization": "Bearer " + image_key(), "User-Agent": "curl/7.88.1", "Content-Type": "application/json"})
+        with _OP.open(req, timeout=400) as r:
+            return save(json.loads(r.read()))
+    return retry(gen, what="生图")
 
 
 _last_submit = [0.0]

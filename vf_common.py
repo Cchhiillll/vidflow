@@ -8,8 +8,8 @@ PROXY = os.environ.get("VIDFLOW_PROXY", "http://127.0.0.1:10819")
 TEXT_MODEL = os.environ.get("VIDFLOW_TEXT_MODEL", "gemini-3.8-flash-high")
 IMAGE_MODEL = os.environ.get("VIDFLOW_IMAGE_MODEL", "gpt-image-2.5")   # gpt 出图额度冷却时可临时换 grok-imagine-image-2.0（10-18 实测走 /images/edits 能照参考图画）
 VIDEO_MODEL = "grok-imagine-video-1.5"
-# 出图可临时换到别的中转（OpenAI 兼容）：VIDFLOW_IMAGE_BASE=https://portal.modelverseapi.com/v1 VIDFLOW_IMAGE_MODEL=gpt-image-2，
-# 密钥放 ~/.config/vidflow/image_api.key（只有一行）；不设就走 CPA。
+# 出图上游顺序写在 ~/.config/vidflow/image_providers.json（CPA → zzone → modelverse，额度用完自动换下一个）；
+# 临时只用某一个：VIDFLOW_IMAGE_BASE=... VIDFLOW_IMAGE_MODEL=...（密钥放 ~/.config/vidflow/image_api.key）。
 IMAGE_BASE = os.environ.get("VIDFLOW_IMAGE_BASE", CPA)
 W, H = 720, 1280            # 成片规格：9:16 竖屏
 STAGES = ["story", "screenplay", "script", "cast", "voices", "boards", "voice", "clips", "sync", "mix", "qc"]
@@ -121,15 +121,35 @@ def _png(path, side=1536):
     b = io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
 
 
-def image_key():
-    if IMAGE_BASE == CPA:
-        return key()
-    return open(f"{HOME}/.config/vidflow/image_api.key", encoding="utf-8").read().strip()
+IMAGE_CHAIN = f"{HOME}/.config/vidflow/image_providers.json"   # 出图上游按顺序排（不含密钥，只写密钥文件路径）
+_img_cool = {}                                                    # 额度用完的上游：名字 -> 冷却到的时间戳
+
+
+def image_providers():
+    """出图上游列表。设了 VIDFLOW_IMAGE_BASE/MODEL 就只用那一个（临时指定）；否则读 image_providers.json；都没有就只用 CPA。"""
+    if os.environ.get("VIDFLOW_IMAGE_BASE") or os.environ.get("VIDFLOW_IMAGE_MODEL"):
+        return [{"name": "指定", "base": IMAGE_BASE, "model": IMAGE_MODEL,
+                 "keyfile": None if IMAGE_BASE == CPA else "~/.config/vidflow/image_api.key"}]
+    if os.path.exists(IMAGE_CHAIN):
+        return json.load(open(IMAGE_CHAIN, encoding="utf-8"))
+    return [{"name": "cpa", "base": CPA, "model": "gpt-image-2.5", "keyfile": None}]
+
+
+def _pkey(pv):
+    return key() if not pv.get("keyfile") else open(os.path.expanduser(pv["keyfile"]), encoding="utf-8").read().strip()
+
+
+def _quota_out(code, text):
+    t = text.lower()
+    return code in (401, 402, 403) or (code == 429 and any(k in t for k in ("usage_limit", "cooldown", "quota", "insufficient", "额度", "余额")))
 
 
 def gen_image(prompt, refs, dest, size="1024x1536"):
     """有参考图时走 /images/edits（multipart + input_fidelity=high）——10-17 实测：/images/generations 的 images/image 字段、
-    grok 的 image_urls 都会被静默忽略，画出来的是无关的人；只有 edits 真正照参考图画。"""
+    grok 的 image_urls 都会被静默忽略，画出来的是无关的人；只有 edits 真正照参考图画。
+    上游按 image_providers.json 的顺序用：某个额度用完（或密钥无效）就冷却 30 分钟换下一个；超时/偶发错误在同一个上游重试 3 次再换。"""
+    import sys
+
     def save(r):
         it = r["data"][0]
         if it.get("b64_json"):
@@ -137,25 +157,39 @@ def gen_image(prompt, refs, dest, size="1024x1536"):
         else:
             download(it["url"], dest)
         return dest
-    if refs:
-        def go():
-            body, b = _multipart({"model": IMAGE_MODEL, "prompt": prompt, "size": size, "input_fidelity": "high", "n": "1"},
-                                 [("image[]", f"ref{i}.png", _png(p)) for i, p in enumerate(refs[:5])])
-            req = urllib.request.Request(f"{IMAGE_BASE}/images/edits", data=body, headers={
-                "Authorization": "Bearer " + image_key(), "User-Agent": "curl/7.88.1", "Content-Type": f"multipart/form-data; boundary={b}"})
-            with _OP.open(req, timeout=400) as r:
-                return save(json.loads(r.read()))
-        return retry(go, what="照参考图生图")
-    if IMAGE_BASE == CPA:
-        return retry(lambda: save(http("POST", f"{CPA}/images/generations", {"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size}, 300)), what="生图")
 
-    def gen():
-        req = urllib.request.Request(f"{IMAGE_BASE}/images/generations", method="POST",
-                                     data=json.dumps({"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size}).encode(),
-                                     headers={"Authorization": "Bearer " + image_key(), "User-Agent": "curl/7.88.1", "Content-Type": "application/json"})
+    def request(pv):
+        h = {"Authorization": "Bearer " + _pkey(pv), "User-Agent": "curl/7.88.1"}
+        if refs:
+            body, b = _multipart({"model": pv["model"], "prompt": prompt, "size": size, "input_fidelity": "high", "n": "1"},
+                                 [("image[]", f"ref{i}.png", _png(p)) for i, p in enumerate(refs[:5])])
+            h["Content-Type"] = f"multipart/form-data; boundary={b}"
+            req = urllib.request.Request(f"{pv['base']}/images/edits", data=body, headers=h)
+        else:
+            h["Content-Type"] = "application/json"
+            req = urllib.request.Request(f"{pv['base']}/images/generations", method="POST", headers=h,
+                                         data=json.dumps({"model": pv["model"], "prompt": prompt, "n": 1, "size": size}).encode())
         with _OP.open(req, timeout=400) as r:
             return save(json.loads(r.read()))
-    return retry(gen, what="生图")
+
+    errs = []
+    for pv in image_providers():
+        if _img_cool.get(pv["name"], 0) > time.time():
+            continue
+        for i in range(3):
+            try:
+                return request(pv)
+            except urllib.error.HTTPError as e:
+                text = e.read().decode(errors="ignore")[:300]
+                errs.append(f"{pv['name']} HTTP {e.code} {text[:120]}")
+                if _quota_out(e.code, text):
+                    _img_cool[pv["name"]] = time.time() + 1800
+                    print(f"[出图] {pv['name']}（{pv['model']}）额度用完或密钥无效，换下一个上游", file=sys.stderr, flush=True)
+                    break
+            except Exception as e:
+                errs.append(f"{pv['name']} {str(e)[:120]}")
+            time.sleep(8 * (i + 1))
+    raise RuntimeError("照参考图生图 连续失败：" + " | ".join(errs[-3:]))
 
 
 _last_submit = [0.0]

@@ -104,9 +104,13 @@ def cmd_status(pj, opt):
 
 def cmd_approve(pj, opt, stage):
     st = pj.state().get(stage, {})
-    if st.get("status") != "awaiting_approval":
-        raise SystemExit(f"{stage} 现在是 {st.get('status')}，不是等确认状态")
+    over = opt.get("override")      # 检查器误判时人工放行：必须写理由，理由记进状态，事后可查
+    if st.get("status") != "awaiting_approval" and not (st.get("status") == "failed" and isinstance(over, str) and over.strip()):
+        raise SystemExit(f"{stage} 现在是 {st.get('status')}，不是等确认状态"
+                         + ("（检查没过但人工判定可用时：vf approve <项目> <步骤> --override \"理由\"）" if st.get("status") == "failed" else ""))
     rep = dict(st.get("report") or {})
+    if st.get("status") == "failed":
+        rep["override"] = {"reason": over.strip(), "at": time.strftime("%m-%d %H:%M"), "fails": rep.get("fails")}
     if stage == "story" and not opt.get("pick"):
         raise SystemExit("选故事方案要带 --pick 方案号")
     if opt.get("pick"):

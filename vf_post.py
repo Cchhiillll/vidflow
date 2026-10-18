@@ -223,13 +223,22 @@ def cmd_reframe(pj, args):
 _asr = [None]
 
 
+ASR_NAMES = [""]     # 片里的人名提示给听写（10-18：「锦山」被听成「李珊」，把念对的台词判成不合格）
+
+
+def set_asr_names(sc):
+    names = [c["name"] for c in sc.get("characters", [])]
+    extra = re.findall(r"[一-鿿]{2}", "".join(n for n in names))
+    ASR_NAMES[0] = ("人名：" + "、".join(dict.fromkeys(names + ["一马", "锦", "由美", "堂岛", "桐生"] if "桐生" in names else names)) + "。") if names else ""
+
+
 def asr(path):
     """本机 faster-whisper large-v3-turbo（已缓存），提示用简体普通话；MiMo 的听写要付费余额，不用。"""
     if _asr[0] is None:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")   # 模型已缓存；联网检查更新曾卡死整个流程（10-18）
         from faster_whisper import WhisperModel
         _asr[0] = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
-    segs, _ = _asr[0].transcribe(path, language="zh", beam_size=5, initial_prompt="以下是普通话的句子，使用简体中文。",
+    segs, _ = _asr[0].transcribe(path, language="zh", beam_size=5, initial_prompt="以下是普通话的句子，使用简体中文。" + ASR_NAMES[0],
                                  condition_on_previous_text=False)
     return "".join(s.text for s in segs)
 
@@ -341,7 +350,7 @@ def _char_times(path):
     """faster-whisper 逐字时间：[(字, 起, 止)]。"""
     asr(path)
     segs, _ = _asr[0].transcribe(path, language="zh", beam_size=5, word_timestamps=True,
-                                 initial_prompt="以下是普通话的句子，使用简体中文。", condition_on_previous_text=False)
+                                 initial_prompt="以下是普通话的句子，使用简体中文。" + ASR_NAMES[0], condition_on_previous_text=False)
     out = []
     for s in segs:
         for w in s.words:
@@ -375,10 +384,10 @@ def _lead_cut(full, lead, n):
     sp0, sp1 = ch[0][1], ch[-1][2]
     rate = (sp1 - sp0) / len(ch)                 # 每个字大约多少秒（含停顿）
     expect = n * rate
-    cands = [(b - a, a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.8 * expect <= sp1 - b <= 1.6 * expect]   # 下限 0.8：台词自己句内的停顿（「不许动！把枪放下！」）不会被当成分界
-    if cands:
+    t0 = ch[-n][1] if len(ch) >= n else ch[0][1]   # 按字数倒推的台词起点（听写漏字时会偏，只作参考）
+    cands = [((b - a) - 1.5 * abs(b - t0), a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.8 * expect <= sp1 - b <= 1.6 * expect]
+    if cands:                                     # 停顿越长越像句子分界，离推算起点越近越可信（下限 0.8：句内停顿不会被当成分界）
         return max(0.0, max(cands)[2] - 0.06)
-    t0 = ch[-n][1] if len(ch) >= n else ch[0][1]
     return max(0.0, t0 - 0.08)
 
 
@@ -439,6 +448,7 @@ def cmd_voices(pj, args):
     import vf_voice
     pj.require("cast", "approved")
     sc, brief = pj.load("script/script.json"), pj.load("brief.json")
+    set_asr_names(sc)
     speakers = []
     for s in sc["shots"]:
         dl = s.get("dialogue")
@@ -495,6 +505,7 @@ def cmd_voice(pj, args):
     import vf_voice
     pj.require("voices", "approved")
     sc = pj.load("script/script.json")
+    set_asr_names(sc)
     os.makedirs(pj.p("audio"), exist_ok=True)
     old_lines = pj.load("audio/lines.json") if os.path.exists(pj.p("audio/lines.json")) else {}
     lines, fails = {}, []

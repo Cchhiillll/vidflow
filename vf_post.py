@@ -226,6 +226,7 @@ _asr = [None]
 def asr(path):
     """本机 faster-whisper large-v3-turbo（已缓存），提示用简体普通话；MiMo 的听写要付费余额，不用。"""
     if _asr[0] is None:
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")   # 模型已缓存；联网检查更新曾卡死整个流程（10-18）
         from faster_whisper import WhisperModel
         _asr[0] = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
     segs, _ = _asr[0].transcribe(path, language="zh", beam_size=5, initial_prompt="以下是普通话的句子，使用简体中文。",

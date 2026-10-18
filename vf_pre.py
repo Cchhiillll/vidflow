@@ -226,6 +226,8 @@ def cmd_cast(pj, args):
     os.makedirs(pj.p("cast"), exist_ok=True)
     anchors = pj.load("cast/anchors.json") if os.path.exists(pj.p("cast/anchors.json")) else {}
     report, fails = {}, []
+    # 系列片新开一集会从共用设定复制已确认的卡：已有的卡默认沿用、不重画（10-18 第2集）；要重画的写 --redo 名字1,名字2
+    redo = set((args.get("redo") or "").replace("，", ",").split(",")) - {""} if isinstance(args.get("redo"), str) else set()
 
     def one(c):
         name = c["name"]; refs = user_refs.get(name) or []
@@ -237,6 +239,8 @@ def cmd_cast(pj, args):
         anchor = anchors.get(name) or c.get("look", "")
         anchors[name] = anchor
         dest = pj.p("cast", f"{name}_sheet.png")
+        if os.path.exists(dest) and name not in redo and not args.get("recheck"):
+            return name, True, {"note": "沿用已确认的设定卡"}
         aura = (brief.get("aura") or {}).get(name, "")
         aura = (f" Screen presence and temperament (show it in posture, gaze and every expression, keep the physical identity unchanged): {aura}. "
                 "Moody cinematic low-key lighting with colored rim light." if aura else "")
@@ -274,7 +278,7 @@ def cmd_cast(pj, args):
     scenes = sc.get("scenes") or [{"name": "location", "look": sc.get("location", "")}]
     for i, scn in enumerate(scenes):
         dest = pj.p("cast", "location.png" if len(scenes) == 1 else f"location_{scn['name']}.png")
-        if args.get("recheck") and os.path.exists(dest):
+        if os.path.exists(dest) and scn["name"] not in redo:
             continue
         if i == 0:
             prompt = (f"Empty establishing plate of the exact same location as the reference photo, vertical composition, no people or animals. "
@@ -287,12 +291,12 @@ def cmd_cast(pj, args):
     for scn in scenes:
         loc = pj.p("cast", "location.png" if len(scenes) == 1 else f"location_{scn['name']}.png")
         dest = pj.p("cast", f"scene_{scn['name']}.png")
-        if os.path.exists(dest):
+        if os.path.exists(dest) and scn["name"] not in redo:
             continue
         gen_image(SCENE_SHEET.format(name=scn["name"], look=scn["look"]), [loc] if os.path.exists(loc) else [], dest, "1536x1024")
     for pr in sc.get("props", []):
         dest = pj.p("cast", f"prop_{pr['name']}.png")
-        if os.path.exists(dest):
+        if os.path.exists(dest) and pr["name"] not in redo:
             continue
         big = bool(re.search(r"car|vehicle|sedan|truck|van|motorcycle|车", pr["name"] + pr["look"], re.I))   # 大件道具不能画成猫爪托着的玩具（10-18 警车）
         prompt = PROP_SHEET.format(name=pr["name"], look=pr["look"])

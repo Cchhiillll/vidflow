@@ -779,7 +779,7 @@ def cmd_mix(pj, args):
         fc = f"[0:v]{vf}[s];[s][2:v]overlay=W-w-28:H-h-36[v]"
     else:
         fc = f"[0:v]{vf}[v]"
-    out = pj.p("final", f"{pj.name}.mp4")
+    out = pj.p("final", f"{os.path.basename(pj.dir)}.mp4")
     sh("ffmpeg", "-v", "error", "-y", *ins2, "-filter_complex", fc, "-map", "[v]", "-map", "1:a", "-c:v", "libx264", "-crf", "17",
        "-preset", "slow", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out, check=True)
     pj.set("mix", "passed", {"file": out, "duration": total})

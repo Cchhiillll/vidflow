@@ -91,7 +91,7 @@ def cmd_status(pj, opt):
         print(f"\n▶ 后台正在跑：{run['cmd']}（开始于 {run['at']}），日志 vf log {pj.name}")
     nxt = (todo(pj) or [None])[0]
     if not nxt:
-        print("\n全部完成，成片：" + pj.p("final", f"{pj.name}.mp4")); return
+        print("\n全部完成，成片：" + pj.p("final", f"{os.path.basename(pj.dir)}.mp4")); return
     x = st.get(nxt, {})
     if x.get("status") == "awaiting_approval":
         print(f"\n下一步：把 {review_file(pj, nxt)} 发给用户看；用户确认后 vf approve {pj.name} {nxt}" + (" --pick 方案号" if nxt == "story" else ""))
@@ -148,7 +148,7 @@ def cmd_auto(pj, opt):
             print(f"⏹ 「{s}」没过检查，先按问题修再继续（vf status {pj.name} 看问题）"); return
         if stt == "awaiting_approval":
             print(f"⏸ 等用户确认「{s}」：把 {review_file(pj, s)} 发给用户；确认后 vf approve {pj.name} {s}" + (" --pick 方案号" if s == "story" else "")); return
-    print("✅ 全部完成：" + pj.p("final", f"{pj.name}.mp4"))
+    print("✅ 全部完成：" + pj.p("final", f"{os.path.basename(pj.dir)}.mp4"))
 
 
 def running(pj):

@@ -366,6 +366,29 @@ def _ends_ok(heard, text):
     return h[:2] == t[:2] and h[-2:] == t[-2:]
 
 
+def _lead_cut(full, lead, n):
+    """找前文和台词的分界点：在听写里定位前文最后两个字（按读音），在它之后的第一个停顿处下刀。
+    （10-18：原来从后往前数台词字数定位，「一马！由美……」句内的停顿被当成分界，把「一马」剪掉了。）找不到前文就退回按字数定位。"""
+    from pypinyin import lazy_pinyin
+    ch = _char_times(full)
+    if len(ch) < n:
+        return None
+    py = lazy_pinyin("".join(c_[0] for c_ in ch)); tail = lazy_pinyin(norm_zh(lead))[-2:]
+    gaps = _silences(full)
+    end_lead = None
+    for k in range(len(py) - 1, 0, -1):          # 从后往前找前文结尾，但它后面至少还要留出台词的一半字数
+        if py[k - 1:k + 1] == tail and len(py) - (k + 1) >= max(1, n // 2):
+            end_lead = ch[k][2]; break
+    if end_lead is not None:
+        nxt = [(a, b) for a, b in gaps if b > end_lead - 0.05]
+        if nxt and nxt[0][0] - end_lead < 0.6:
+            return max(0.0, nxt[0][1] - 0.06)
+        return max(0.0, end_lead + 0.03)
+    t0 = ch[-n][1]
+    near = [(a, b) for a, b in gaps if t0 - 0.8 <= b <= t0 + 0.1]
+    return max(0.0, (near[-1][1] - 0.06) if near else t0 - 0.08)
+
+
 def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
     """录一句片中台词（10-18 定稿做法，用户认可的质量）：
     短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
@@ -382,12 +405,9 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
             pj.log(f"对白 {sid} 第 {k + 1} 次合成失败：{str(e)[:80]}"); continue
         start = 0.0
         if lead:
-            ch = _char_times(full)
-            if len(ch) < n:
+            start = _lead_cut(full, lead, n)
+            if start is None:
                 continue
-            t0 = ch[-n][1]
-            gaps = [(a, b) for a, b in _silences(full) if t0 - 0.8 <= b <= t0 + 0.35]
-            start = max(0.0, (gaps[-1][1] - 0.06) if gaps else t0 - 0.08)
         sh("ffmpeg", "-v", "error", "-y", "-i", full, "-ss", f"{start:.3f}", "-af",
            "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,afade=t=in:d=0.015",
            "-ar", "48000", "-ac", "1", cut, check=True)
@@ -395,7 +415,7 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
         extra = len(norm_zh(heard)) > n + 1
         ends_ok = _ends_ok(heard, text)        # 开头、结尾两个字必须念到（10-18：「一马！」被剪掉还按 91% 放过）
         f0 = f0_median(cut)
-        drift = bool(ref_f0 and f0 and abs(f0 - ref_f0) / ref_f0 > 0.35)
+        drift = bool(ref_f0 and f0 and (f0 < ref_f0 * 0.7 or f0 > ref_f0 * 1.8))   # 喊叫、激动时音高自然升高，只有偏低 30% 或高到 1.8 倍才算漂（像换了个人）
         score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0)
         pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
         if best is None or score > best[0]:

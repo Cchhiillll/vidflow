@@ -125,11 +125,22 @@ def cmd_script(pj, args):
     refs = [r for v in brief.get("refs", {}).values() for r in (v if isinstance(v, list) else [v])]
     ref_desc = vision("用中文详细描述这张图：主体是谁、长相（毛色、脸型、眼睛）、穿着（每一件）、姿态、所处场景、光线、镜头景别。只描述看得见的。", refs[:1], json_out=False) if refs else "无"
     pj.save("script/ref_desc.json", {"desc": ref_desc})
+    def lines_changed(sc):
+        """确认过的剧本台词必须一字不改地分到镜头里（10-18 第2集：模型改了两句台词、检查没拦住）。"""
+        if pj.state().get("screenplay", {}).get("status") != "approved":
+            return []
+        want = [d["text"] for d in pj.load("story/screenplay.json").get("dialogue", [])]
+        got = [(x.get("dialogue") or {}).get("text") for x in sc.get("shots", []) if x.get("dialogue")]
+        if want == got:
+            return []
+        return ["台词和确认过的剧本不一致（必须一字不改、按顺序）：剧本有分镜没有的「" + "」「".join(w for w in want if w not in got)
+                + "」；分镜改出来的「" + "」「".join(g for g in got if g not in want) + "」"]
+
+    last_err = []
     if args.get("from"):
         sc = json.load(open(args["from"], encoding="utf-8"))
         pj.log("剧本：用传入的分镜表")
     else:
-        last_err = []
         for attempt in range(5):
             fix = ("\n\n上一版没过检查，问题：" + "；".join(last_err)) if last_err else ""
             if args.get("notes"):
@@ -139,6 +150,7 @@ def cmd_script(pj, args):
             sc = chat([{"role": "user", "content": SCRIPT_PROMPT.format(req=brief.get("requirement", ""), story=brief.get("story", "无"), rules=RULES,
                                                                           ref_desc=ref_desc, dur=brief.get("duration", 60)) + fix}], json_out=True)
             last_err, _ = check_script(sc, brief)
+            last_err += lines_changed(sc)
             if not last_err:
                 last_err = supervise(sc)
             if not last_err:          # 观众视角审读：复述得出故事、没有废镜头和不自然的台词才算过
@@ -148,7 +160,12 @@ def cmd_script(pj, args):
             pj.log(f"剧本第 {attempt + 1} 版：{len(sc.get('shots', []))} 镜，问题 {len(last_err)} 个 " + "；".join(last_err)[:200])
             if not last_err:
                 break
+    anchors = pj.load("cast/anchors.json") if os.path.exists(pj.p("cast/anchors.json")) else {}
+    for c in sc.get("characters", []):     # 已有定稿外观（系列片共用设定）就用它（10-18 第2集：模型把白猫锦山和虎斑桐生写反了）
+        if c.get("name") in anchors:
+            c["look"] = anchors[c["name"]]
     errs, warns = check_script(sc, brief)
+    errs += lines_changed(sc)
     if not errs:
         errs = last_err          # 场记审查结果用循环里最后一次的，不重复审（模型每次审的结论会有出入）
     pj.save("script/script.json", sc)

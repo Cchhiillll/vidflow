@@ -399,7 +399,10 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
     n = len(norm_zh(text)); best = None
     lead = (lead or "").strip()
     style = voice_style(sc, c)
-    for k in range(tries):
+    plan = [lead] * tries + ([""] * 3 if lead else [])     # 带前文的都不合格，再试 3 次不带前文直接念（10-18 s01：模型把前文和台词连着念，没有下刀点）
+    for k, lead in enumerate(plan):
+        if k >= tries and best and best[0] >= 0.95:
+            break
         full, cut = pj.p("audio", f"{sid}_full{k}.wav"), pj.p("audio", f"{sid}_take{k}.wav")
         try:
             say(pj, c, style, (lead + text) if lead else text, full)

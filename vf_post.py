@@ -803,6 +803,7 @@ def cmd_mix(pj, args):
 def cmd_qc(pj, args):
     pj.require("mix")
     sc, lines = pj.load("script/script.json"), pj.load("audio/placement.json")
+    set_asr_names(pj.load("script/script.json"))   # 成片听写也提示人名（10-18：「桐生」被听成「红尚」误判）
     out = pj.state()["mix"]["report"]["file"]
     pr, errs, offs, t = probe(out), [], {}, 0.0
     for s in sc["shots"]:

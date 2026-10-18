@@ -264,6 +264,10 @@ class Project:
         s = self.state()
         s[stage] = {"status": status, "at": dt.datetime.now().isoformat(timespec="seconds"), "report": report or {}}
         json.dump(s, open(self.state_path, "w"), ensure_ascii=False, indent=2)
+        try:
+            write_handoff(self)
+        except Exception as e:
+            print(f"（进度说明没写成：{e}）", flush=True)
 
     def require(self, stage, need="passed"):
         st = self.state().get(stage, {}).get("status")
@@ -276,3 +280,56 @@ class Project:
         print(line, flush=True)
         with open(self.p("vidflow.log"), "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+
+
+STAGE_ZH = {"story": "故事方案", "screenplay": "剧本", "script": "分镜表", "cast": "角色/场景/道具设定卡", "voices": "角色音色（试音）",
+            "boards": "分镜首帧", "voice": "录全部台词", "clips": "生成视频片段", "sync": "对口型", "mix": "合成成片", "qc": "成片检查"}
+STATUS_ZH = {"approved": "已确认", "passed": "已通过检查", "awaiting_approval": "等确认", "failed": "没过", "running": "进行中"}
+REVIEW_GATES = "音色、新角色卡/场景卡/道具卡、分镜首帧（按剧情顺序连起来看）、生成好的视频和配音、成片"
+
+
+def write_handoff(pj):
+    """每次状态变化都重写项目文件夹里的「进度说明.md」：新会话（Claude Code 或 Hermes）进来先读它，不用用户从头讲。
+    手写的决定和备忘放在同目录 notes.md，会原样带进来。"""
+    st = pj.state()
+    b = pj.load("brief.json") if os.path.exists(pj.p("brief.json")) else {}
+    sc = pj.load("script/script.json") if os.path.exists(pj.p("script/script.json")) else {}
+    L = [f"# {b.get('title') or pj.name} · 进度说明", "",
+         f"> 程序自动生成，最后更新 {dt.datetime.now():%m-%d %H:%M}。不要手改；要记的决定写进同目录 notes.md。", "",
+         "## 这一集讲什么", b.get("episode") or b.get("story_core") or sc.get("logline") or "（未写）", ""]
+    if sc.get("theme"):
+        L += [f"想让观众感受到：{sc['theme']}", ""]
+    if b.get("source"):
+        L += ["## 原作依据", b["source"], ""]
+    L += ["## 各步状态", "| 步骤 | 状态 | 时间 | 备注 |", "|---|---|---|---|"]
+    nxt = None
+    for k in STAGES:
+        v = st.get(k)
+        if not v:
+            nxt = nxt or k; L.append(f"| {STAGE_ZH.get(k, k)} | 没做 | | |"); continue
+        rep = v.get("report") or {}
+        note = []
+        if rep.get("override"):
+            note.append("人工放行：" + str(rep["override"].get("reason", ""))[:80])
+        if rep.get("fails"):
+            note.append("问题：" + "、".join(map(str, rep["fails"]))[:80])
+        if rep.get("note"):
+            note.append(str(rep["note"])[:80])
+        L.append(f"| {STAGE_ZH.get(k, k)} | {STATUS_ZH.get(v['status'], v['status'])} | {v.get('at', '')[5:16].replace('T', ' ')} | {'；'.join(note)} |")
+        if v["status"] not in ("passed", "approved"):
+            nxt = nxt or k
+    L += ["", "## 下一步", (f"「{STAGE_ZH.get(nxt, nxt)}」：`vf {nxt} {pj.name}`（后台跑用 `vf bg {pj.name} {nxt}`）" if nxt else "全部完成"), ""]
+    if sc.get("shots"):
+        nd = sum(1 for s in sc["shots"] if s.get("dialogue"))
+        L += ["## 分镜概况", f"{len(sc['shots'])} 镜，约 {sum(float(s.get('duration') or 0) for s in sc['shots']):.0f} 秒，{nd} 句台词；角色：{'、'.join(c['name'] for c in sc.get('characters', []))}；"
+              f"场景：{'、'.join(x['name'] for x in sc.get('scenes', []))}；道具：{'、'.join(x['name'] for x in sc.get('props', []))}", ""]
+    files = [("分镜表（可读版）", "script/script.md"), ("分镜表（程序用）", "script/script.json"), ("设定卡/音色", "cast/"), ("分镜首帧总览", "boards/storyboard.jpg"),
+             ("台词录音", "audio/lines.json"), ("视频片段挑选", "clips/picks.json"), ("成片", f"final/{os.path.basename(pj.dir)}.mp4"), ("运行日志", "vidflow.log")]
+    L += ["## 关键文件"] + [f"- {n}：`{pj.p(f)}`" for n, f in files if os.path.exists(pj.p(f))] + [""]
+    L += ["## 规矩（换会话必读）", f"- 用户只做业务方：内核、剧本、台词由导演（agent）判断定稿，但这些产物必须先发用户过一遍，他点头才进下一环：{REVIEW_GATES}。",
+          "- 检查标准只有 Claude Code 能改；Hermes 卡住先报用户，不许自己放宽标准。人工放行用 `vf approve <项目> <步骤> --override \"理由\"`。",
+          "- 改动 vidflow 代码要在 ~/apps/vidflow 提交 git。", ""]
+    if os.path.exists(pj.p("notes.md")):
+        L += ["## 备忘（notes.md）", open(pj.p("notes.md"), encoding="utf-8").read().strip(), ""]
+    open(pj.p("进度说明.md"), "w", encoding="utf-8").write("\n".join(L))

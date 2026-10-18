@@ -646,7 +646,7 @@ def cmd_sync(pj, args):
         sh("ffmpeg", "-v", "error", "-y", "-i", src, "-af", f"atempo={tempo:.4f}", placed, check=True)
         pdur = probe(placed)["dur"]
         pj.log(f"对口型 {sid}：嘴动 {a:.2f}~{b:.2f}s（{wlen:.1f}s），台词 {ln['dur']:.1f}s → 变速 {tempo:.2f}")
-        if pdur > wlen + 0.6 or pdur < wlen - 1.2:
+        if pdur > wlen + 0.6 or pdur < wlen - 0.8:     # 嘴比声音多动 0.8 秒以上就算对不上（10-18 用户指出「嘴在动却没声音」）
             fails.append(f"{sid}：嘴动 {wlen:.1f}s，台词 {pdur:.1f}s，对不上——重做这一镜（vf clips <项目> --shots {sid}）")
         place[sid] = {"file": os.path.basename(placed), "start": round(a, 3), "dur": round(pdur, 3), "text": ln["text"],
                       "mouth": [round(a, 2), round(b, 2)]}

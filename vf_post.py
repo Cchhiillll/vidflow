@@ -391,7 +391,15 @@ def _lead_cut(full, lead, n):
     return max(0.0, t0 - 0.08)
 
 
-def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
+def _rate_ok(dur, text, direction=""):
+    """语速：平均每字不超过 0.36 秒（10-18 第一集：堂岛 15 个字念了 8 秒、紧急电话念得拖沓）；
+    台词带「……」或表演指导写了慢/轻声/一字一顿/自言自语的放宽到 0.6 秒。"""
+    n = max(1, len(norm_zh(text)))
+    slow = "……" in text or bool(re.search("慢|轻声|很轻|一字一顿|一字一句|自言自语|几乎说不出", direction or ""))
+    return dur / n <= (0.6 if slow else 0.36)
+
+
+def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""):
     """录一句片中台词（10-18 定稿做法，用户认可的质量）：
     短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
     再按逐字时间把这一句剪出来；每次都听写核对（读音一致、不多字）、查音高没漂，最多录 tries 次挑最好的。
@@ -419,13 +427,14 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
         heard = asr(cut); sim = same_line(heard, text)
         extra = len(norm_zh(heard)) > n + 1
         ends_ok = _ends_ok(heard, text)        # 开头、结尾两个字必须念到（10-18：「一马！」被剪掉还按 91% 放过）
+        rate_ok = _rate_ok(probe(cut)["dur"], text, direction)
         f0 = f0_median(cut)
         drift = bool(ref_f0 and f0 and (f0 < ref_f0 * 0.7 or f0 > ref_f0 * 1.8))   # 喊叫、激动时音高自然升高，只有偏低 30% 或高到 1.8 倍才算漂（像换了个人）
-        score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0)
-        pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
+        score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0) - (0.3 if not rate_ok else 0)
+        pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}{'' if rate_ok else '，太慢'}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
         if best is None or score > best[0]:
             best = (score, cut, heard, sim, f0)
-        if sim >= 0.99 and not extra and not drift and ends_ok:
+        if sim >= 0.99 and not extra and not drift and ends_ok and rate_ok:
             break
     if not best or best[0] < 0.95:
         return False, best[2] if best else "", best[3] if best else 0.0, "录不出合格的一版"
@@ -524,7 +533,7 @@ def cmd_voice(pj, args):
         clean = pj.p("audio", f"{sid}_clean.wav")
         meta = pj.p("cast", f"voice_{c}_meta.json")
         ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
-        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0)
+        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0, direction=dl.get("direction", ""))
         if not ok_tts:
             fails.append(f"{sid} 录了 5 次都不合格（最后听写「{heard}」）"); continue
         lines[sid] = {"file": os.path.basename(clean), "dur": round(probe(clean)["dur"], 3), "speaker": c, "text": dl["text"],

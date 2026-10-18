@@ -155,7 +155,7 @@ def cmd_clips(pj, args):
                 return sid, None, bad, ""
             best, why = pick_best(s, good)
             final = pj.p("clips", f"{sid}.mp4"); trim(best, float(s["duration"]), final)
-            return sid, os.path.basename(final), bad, why
+            return sid, os.path.basename(final), bad, why + (f"｜line_dur={ln['dur']:.2f}" if ln else "")
         for k in range(ntake + 2):                     # 先生成 ntake 条；都不合格再补两条
             if len(good) >= ntake or (k >= ntake and good):
                 break

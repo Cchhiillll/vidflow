@@ -294,7 +294,11 @@ def cmd_cast(pj, args):
         dest = pj.p("cast", f"prop_{pr['name']}.png")
         if os.path.exists(dest):
             continue
-        gen_image(PROP_SHEET.format(name=pr["name"], look=pr["look"]), [], dest, "1536x1024")
+        big = bool(re.search(r"car|vehicle|sedan|truck|van|motorcycle|车", pr["name"] + pr["look"], re.I))   # 大件道具不能画成猫爪托着的玩具（10-18 警车）
+        prompt = PROP_SHEET.format(name=pr["name"], look=pr["look"])
+        if big:
+            prompt = prompt.replace("a scale view of the prop held in a white anthropomorphic cat paw", "a full-size scale view with an adult anthropomorphic cat in a suit standing beside it")
+        gen_image(prompt, [], dest, "1536x1024")
     status = "awaiting_approval" if not fails else "failed"
     pj.set("cast", status, {"fails": fails, "detail": report})
     print(("✅ 角色设定卡和场景图做好了，请用户确认后 vf approve <项目> cast：" if not fails else "❌ 这些角色的设定卡和原图对不上：" + "、".join(fails) + "\n文件夹：") + pj.p("cast"))

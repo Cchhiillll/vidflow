@@ -357,7 +357,16 @@ def _silences(path, db=-38, d=0.12):
     return list(zip(st, en))
 
 
-def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=5):
+def _ends_ok(heard, text):
+    """听写的开头两个字、结尾两个字和台词读音一致（同音字算对）。"""
+    from pypinyin import lazy_pinyin
+    h, t = lazy_pinyin(norm_zh(heard)), lazy_pinyin(norm_zh(text))
+    if len(t) < 2 or len(h) < 2:
+        return h == t
+    return h[:2] == t[:2] and h[-2:] == t[-2:]
+
+
+def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):
     """录一句片中台词（10-18 定稿做法，用户认可的质量）：
     短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
     再按逐字时间把这一句剪出来；每次都听写核对（读音一致、不多字）、查音高没漂，最多录 tries 次挑最好的。
@@ -384,15 +393,16 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=5):
            "-ar", "48000", "-ac", "1", cut, check=True)
         heard = asr(cut); sim = same_line(heard, text)
         extra = len(norm_zh(heard)) > n + 1
+        ends_ok = _ends_ok(heard, text)        # 开头、结尾两个字必须念到（10-18：「一马！」被剪掉还按 91% 放过）
         f0 = f0_median(cut)
         drift = bool(ref_f0 and f0 and abs(f0 - ref_f0) / ref_f0 > 0.35)
-        score = sim - (0.5 if extra else 0) - (0.3 if drift else 0)
+        score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0)
         pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
         if best is None or score > best[0]:
             best = (score, cut, heard, sim, f0)
-        if sim >= 0.99 and not extra and not drift:
+        if sim >= 0.99 and not extra and not drift and ends_ok:
             break
-    if not best or best[0] < 0.85:
+    if not best or best[0] < 0.95:
         return False, best[2] if best else "", best[3] if best else 0.0, "录不出合格的一版"
     sh("ffmpeg", "-v", "error", "-y", "-i", best[1], "-af", "loudnorm=I=-19:TP=-1.5", "-ar", "48000", "-ac", "1", dest, check=True)
     for f in os.listdir(pj.p("audio")):

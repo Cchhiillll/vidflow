@@ -610,6 +610,8 @@ def cmd_sync(pj, args):
     sc = pj.load("script/script.json")
     picks, lines = pj.load("clips/picks.json"), pj.load("audio/lines.json")
     place, fails = {}, []
+    cpath = pj.p("audio", "mouth_cache.json")
+    cache = json.load(open(cpath)) if os.path.exists(cpath) else {}
     for s in sc["shots"]:
         sid = s["id"]; ln = lines.get(sid)
         if not ln:
@@ -617,7 +619,24 @@ def cmd_sync(pj, args):
         clip = pj.p("clips", picks[sid]["file"]); src = pj.p("audio", ln["file"])
         if ln.get("offscreen"):
             place[sid] = {"file": ln["file"], "start": 0.5, "dur": ln["dur"], "text": ln["text"]}; continue
-        segs = mouth_activity(pj, s, clip, ln["speaker"]) or []
+        at = (s.get("dialogue") or {}).get("place_at")     # 导演看过画面后手动指定台词从第几秒开始（比如说话人中途转过身去）
+        if at is not None:
+            place[sid] = {"file": ln["file"], "start": float(at), "dur": ln["dur"], "text": ln["text"], "manual": True}
+            pj.log(f"对口型 {sid}：按分镜表手动指定从 {float(at):.2f}s 开始"); continue
+        # 测嘴动靠模型框嘴的位置，每次框得不一样结果就会变（10-18：没动过的 s05/s06 这轮过、下轮不过）：
+        # 同一片段的结果存下来不重测；判对不上之前再测两次取最长的那次
+        key = f"{os.path.basename(clip)}:{os.path.getmtime(clip):.0f}"
+        segs = cache.get(key)
+        if segs is None:
+            segs = mouth_activity(pj, s, clip, ln["speaker"]) or []
+        def span(x):
+            return (x[-1][1] - x[0][0]) if x else 0.0
+        if span(segs) + 0.6 < ln["dur"] / 1.12:
+            for _ in range(2):
+                more = mouth_activity(pj, s, clip, ln["speaker"]) or []
+                if span(more) > span(segs):
+                    segs = more
+        cache[key] = segs
         if not segs:
             fails.append(f"{sid}：画面里没看到{ln['speaker']}张嘴说话"); continue
         a, b = segs[0][0], segs[-1][1]               # 第一次开口到最后一次闭口
@@ -632,6 +651,7 @@ def cmd_sync(pj, args):
         place[sid] = {"file": os.path.basename(placed), "start": round(a, 3), "dur": round(pdur, 3), "text": ln["text"],
                       "mouth": [round(a, 2), round(b, 2)]}
     pj.save("audio/placement.json", place)
+    json.dump(cache, open(cpath, "w"), ensure_ascii=False)
     pj.set("sync", "passed" if not fails else "failed", {"fails": fails})
     print("✅ 台词都放到了嘴在动的位置" if not fails else "❌ 口型对不上：\n- " + "\n- ".join(fails))
 

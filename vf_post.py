@@ -29,8 +29,8 @@ def frozen_ratio(video, dur):
     return tot / max(dur, 0.1)
 
 
-CLIP_CHECK = ("这是短片第 {sid} 镜视频里的一帧。只检查三件单帧能判断的事："
-              "1) 不能出现：{hide}；2) 角色的身体状态要和要求一致（站着还是坐着、在不在凳子上）：{action}；3) 除了 {chars} 不能有近处的别的人或动物（远处背景里模糊的路人不算）。"
+CLIP_CHECK = ("这是短片第 {sid} 镜视频里的一帧。只检查四件单帧能判断的事："
+              "1) 不能出现：{hide}；2) 角色的身体状态要和要求一致（站着还是坐着、在不在凳子上）：{action}；3) 除了 {chars} 不能有近处的别的人或动物（远处背景里模糊的路人不算）；4) 画面上不能叠加字幕或对白文字（纸张、招牌等道具上本来印着的字不算）。"
               "视线朝向、头往哪边转、动作做没做完、道具是否在这一帧画面里，都不用管。"
               '只输出 JSON：{{"ok":true,"problems":"具体问题"}}')
 
@@ -130,11 +130,11 @@ def cmd_clips(pj, args):
         # 图生视频只写动作和机位，外形全由首帧决定（10-17 教训：把「牛仔裤、皮鞋」写进提示词，Grok 就会把腿和鞋画出来、导致露底）
         if start:
             prompt = (s["video_prompt"] + " Keep every character's appearance, framing and the visible parts of the body exactly as in the first frame;"
-                      " do not reveal anything that is outside the first frame. Vertical 9:16, live-action film look.")
+                      " do not reveal anything that is outside the first frame. Vertical 9:16, live-action film look. No subtitles, captions or any on-screen text overlaid on the picture.")
         else:                                          # 参照图生成：要把构图写进去，长相衣服以参照图为准
             prompt = (f"Opening frame: {s['shot_size']}, {s['image_prompt']} Then: {s['video_prompt']} "
                       "The characters must look exactly like the reference images (same face, fur and outfit). "
-                      + (f"Do NOT show: {s['hide']}. " if s.get("hide") else "") + "Vertical 9:16, live-action film look.")
+                      + (f"Do NOT show: {s['hide']}. " if s.get("hide") else "") + "Vertical 9:16, live-action film look. No subtitles, captions or any on-screen text overlaid on the picture.")
         ln = lines.get(sid)
         if ln and not (s.get("dialogue") or {}).get("offscreen"):
             prompt += (f" Timing: the speaking character starts talking about 0.5 seconds into the shot and keeps talking continuously "

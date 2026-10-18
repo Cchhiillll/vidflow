@@ -529,7 +529,7 @@ def cmd_voice(pj, args):
         ref = pj.p("cast", f"voice_{c}.json") if os.path.exists(pj.p("cast", f"voice_{c}.json")) else pj.p("cast", f"voice_{c}.mp3")
         prev = old_lines.get(sid)
         if prev and prev.get("text") == dl["text"] and prev.get("ref_mtime") == os.path.getmtime(ref) and prev.get("match", 0) >= 0.7:
-            lines[sid] = prev; continue
+            lines[sid] = dict(prev, offscreen=bool(dl.get("offscreen"))); continue      # 沿用旧录音时，画外音标记以分镜表为准（10-18 s22 改了标记没生效）
         clean = pj.p("audio", f"{sid}_clean.wav")
         meta = pj.p("cast", f"voice_{c}_meta.json")
         ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0

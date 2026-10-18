@@ -367,26 +367,19 @@ def _ends_ok(heard, text):
 
 
 def _lead_cut(full, lead, n):
-    """找前文和台词的分界点：在听写里定位前文最后两个字（按读音），在它之后的第一个停顿处下刀。
-    （10-18：原来从后往前数台词字数定位，「一马！由美……」句内的停顿被当成分界，把「一马」剪掉了。）找不到前文就退回按字数定位。"""
-    from pypinyin import lazy_pinyin
+    """找前文和台词的分界点。句子之间的停顿总比句内停顿长：在「它后面剩下的说话时长 ≈ 这句台词按语速该有的长度」的范围里，
+    取最长的那个停顿下刀（10-18：靠听写认字定位，会被句内停顿、前文和台词重字、单字称呼认不出带偏，剪掉「一马」「放开她」）。"""
     ch = _char_times(full)
-    if len(ch) < n:
+    if len(ch) < max(2, n // 2):
         return None
-    py = lazy_pinyin("".join(c_[0] for c_ in ch)); tail = lazy_pinyin(norm_zh(lead))[-2:]
-    gaps = _silences(full)
-    end_lead = None
-    for k in range(len(py) - 1, 0, -1):          # 从后往前找前文结尾，但它后面至少还要留出台词的一半字数
-        if py[k - 1:k + 1] == tail and len(py) - (k + 1) >= max(1, n // 2):
-            end_lead = ch[k][2]; break
-    if end_lead is not None:
-        nxt = [(a, b) for a, b in gaps if b > end_lead - 0.05]
-        if nxt and nxt[0][0] - end_lead < 0.6:
-            return max(0.0, nxt[0][1] - 0.06)
-        return max(0.0, end_lead + 0.03)
-    t0 = ch[-n][1]
-    near = [(a, b) for a, b in gaps if t0 - 0.8 <= b <= t0 + 0.1]
-    return max(0.0, (near[-1][1] - 0.06) if near else t0 - 0.08)
+    sp0, sp1 = ch[0][1], ch[-1][2]
+    rate = (sp1 - sp0) / len(ch)                 # 每个字大约多少秒（含停顿）
+    expect = n * rate
+    cands = [(b - a, a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.55 * expect <= sp1 - b <= 1.6 * expect]
+    if cands:
+        return max(0.0, max(cands)[2] - 0.06)
+    t0 = ch[-n][1] if len(ch) >= n else ch[0][1]
+    return max(0.0, t0 - 0.08)
 
 
 def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6):

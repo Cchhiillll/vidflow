@@ -375,7 +375,7 @@ def _lead_cut(full, lead, n):
     sp0, sp1 = ch[0][1], ch[-1][2]
     rate = (sp1 - sp0) / len(ch)                 # 每个字大约多少秒（含停顿）
     expect = n * rate
-    cands = [(b - a, a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.55 * expect <= sp1 - b <= 1.6 * expect]
+    cands = [(b - a, a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.8 * expect <= sp1 - b <= 1.6 * expect]   # 下限 0.8：台词自己句内的停顿（「不许动！把枪放下！」）不会被当成分界
     if cands:
         return max(0.0, max(cands)[2] - 0.06)
     t0 = ch[-n][1] if len(ch) >= n else ch[0][1]
@@ -455,8 +455,12 @@ def cmd_voices(pj, args):
                 s["dialogue"].setdefault("direction", (fill.get("directions") or {}).get(s["id"], "自然、克制地说"))
         pj.save("script/script.json", sc)
     os.makedirs(pj.p("cast"), exist_ok=True)
-    report, fails = {}, []
+    only = set((args.get("only") or "").replace("，", ",").split(",")) - {""}     # --only 角色1,角色2：只重录这几个，其余沿用上次结果
+    prev = pj.state().get("voices", {}).get("report", {}) or {}
+    report, fails = (dict(prev.get("detail") or {}), [f for f in (prev.get("fails") or []) if f not in only]) if only else ({}, [])
     for c in speakers:
+        if only and c not in only:
+            continue
         mine = [s for s in sc["shots"] if (s.get("dialogue") or {}).get("speaker") == c]
         text = "".join(tts_text(s["dialogue"]["text"]) for s in mine[:2])
         desc = next(x for x in sc["characters"] if x["name"] == c).get("voice_desc", "")

@@ -1,6 +1,7 @@
 """前期：剧本分镜表（script）→ 定角色和场景（cast）→ 每镜分镜图（boards）。"""
 import concurrent.futures as cf, json, math, os, re, shutil
 from vf_common import *
+from vf_story import RULES, review_text
 
 BANNED = re.compile(r"cinematic tension|epic|dramatic|emotional|humorous|intense|powerful|majestic|stunning|breathtaking|"
                     r"contrast|vibe|mood of|feeling of|atmosphere of|masterpiece|8k|ultra[- ]?realistic", re.I)
@@ -12,22 +13,24 @@ SCRIPT_PROMPT = """你是短片导演兼分镜师。根据下面的创作要求�
 参考图里的主体与场景：{ref_desc}
 目标总时长：约 {dur} 秒
 
+{rules}
+
 必须遵守的行业规范：
 1. 结构：开场 3 秒内有具体动作或悬念；起、承、转（反转）、合；结尾留余味。
 2. 每个镜头只拍一个主要动作；景别（大远景/全景/中景/近景/特写/大特写）和机位运动（固定/推/拉/摇/跟）写清楚。
-3. 镜头时长按内容定：纯动作或反应 2~5 秒；有台词的镜头 ≈ 台词字数÷4 + 1.5 秒；单镜不超过 15 秒（视频模型上限）。总时长靠镜头数凑，不要把单镜拉长。
-4. 一个镜头最多一句台词、一个说话人；对白多就拆成说话人镜头和听者反应镜头。台词口语、短句，不写散文。
+3. 镜头时长按内容定：一般 4~8 秒，有台词的镜头 ≥ 台词字数÷4 + 2 秒；单镜不超过 15 秒（视频模型上限）。不要为了凑节奏把一个动作切成好几个镜头。
+4. 一个镜头最多一句台词、一个说话人（程序限制）；对话用固定的几个机位来回切（双人镜头、说话人近景），同一机位的镜头 image_prompt 构图保持一致。台词口语、短句。
 5. 前后一致：场景尽量少（≤3 个），在 scenes 里列出每个场景并写固定英文外观，每镜用 scene 指明在哪个场景；人物外观以参考图为准，不改服装。
 6. 和上一镜是同一机位、同一动作的直接延续时，continuous_from 写上一镜的 id，否则 null。
 7. image_prompt（英文）：这个镜头第一帧的画面：景别、机位角度、谁在画面哪个位置、姿态、道具、光线。只写看得见的东西。
-8. video_prompt（英文）：从第一帧开始发生的事：一个具体的身体动作 + 一个机位运动 + 环境动态。禁止抽象形容词（cinematic tension、epic、dramatic、emotional、humorous 之类）。有台词的镜头写明谁在说、嘴随说话开合，并把台词原文用引号写进去，例如：The cat speaks in Mandarin, mouth moving with the words: "……"。不说话的角色写 mouth closed。
-9. 避开视频模型容易崩的画面：人手从画外伸进来拿放东西、剧烈转身、多个角色肢体接触。道具需要出现时，改成道具已经在位的插入镜头加人物反应镜头。
+8. video_prompt（英文）：从第一帧开始发生的事：一个具体的身体动作 + 一个机位运动 + 环境动态。禁止抽象形容词（cinematic tension、epic、dramatic、emotional、humorous 之类）。有台词的镜头写明谁在说、嘴随说话自然开合，例如：Kiryu speaks in Mandarin, mouth moving naturally。不要把台词原文写进 video_prompt（视频模型会把它画成字幕）。不说话的角色写 mouth closed。
+9. 避开视频模型容易崩的画面：人手从画外伸进来拿放东西、剧烈转身、多个角色肢体接触。道具在人物镜头里自然带到就行，不单独拍道具或手部特写（写作铁律第 10 条）。
    物理常识：道具不会自己动。要让东西移动，画面里必须拍到推它的手并在 video_prompt 写清楚；拍不了手，就让道具一开始就在位、全程静止（video_prompt 写 the plate stays completely still）。
 10. 道具连续：列出关键道具（props），每个写一句固定的英文外观（会原样写进每个镜头），每镜 props 写这一镜画面里有哪些。同一道具全片外观不变（比如生鱼片不能变成熟肉、水杯不能变成酒杯）。
 11. 反转/揭底：如果故事靠某个信息在后面揭开（比如角色身材、身份），揭开之前的每一镜在 hide 里写清楚画面不能出现什么，并用景别和机位藏住它；揭开那一镜及之后 hide 写空。
-12. 画面里除了角色表里的人物，不要出现别的人。
-14. 剪辑节奏与连贯（行业剪辑规范）：平均每镜 2~4 秒，只有关键情绪或揭底镜头可以到 5~7 秒；镜头之间按动作接、按视线接（上一镜看向哪，下一镜就是他看到的东西）；对话用正反打；保持 180 度轴线和左右方位一致；同一场景里不要无缘无故跳机位。每一镜都要回答「为什么现在切到这里」。
-15. 台词精简：每句台词都必须推动情节或揭示人物，不能重复画面已经交代的信息，不要解释潜台词；能用表情和动作表达的就不用台词。全片台词越少越好。
+12. 画面里除了角色表里的人物，不要出现别的人。画面里露出身体任何部分（手、爪、背影）的角色，都要写进这一镜的 characters。
+14. 剪辑节奏与连贯（行业剪辑规范）：平均每镜 4~8 秒，镜头数宁少勿多；镜头之间按动作接、按视线接（上一镜看向哪，下一镜就是他看到的东西）；对话用正反打；保持 180 度轴线和左右方位一致；同一场景里不要无缘无故跳机位。每一镜都要回答「为什么现在切到这里」。
+15. 台词：有确认过的剧本时，剧本里的台词一句不删、一字不改地分到镜头里；没有剧本时按写作铁律第 4、5 条写（人物直接说话，台词撑得起时长，不重复）。
 17. 画面字幕（时间地点、「片刻前」「十年后」这类）写在 caption（中文，没有写空字符串），后期统一加；画面里的纸张、招牌等小字不要依赖它清楚可读（视频模型写字会糊），需要观众读懂的信息用 caption 或台词交代。
 16. 每句台词写 direction（表演指导：情绪、语气、轻重、停顿）；每个说话角色写 voice_desc（中文音色描述：性别、年龄感、音高、质感、语速）。
 13. 所有说话的人（包括只出声不出镜的画外音）都必须在 characters 里。画外音台词在 dialogue 里写 "offscreen": true，这一镜画面里的角色嘴巴闭着。
@@ -66,8 +69,9 @@ def check_script(sc, brief):
                 errs.append(f"{sid} 台词 {n} 字至少要 {need:.1f}s，现在 {d}s")
             if dl.get("speaker") not in names:
                 errs.append(f"{sid} 说话人「{dl.get('speaker')}」不在角色表里")
-            if not dl.get("offscreen") and '"' not in s.get("video_prompt", "") and "“" not in s.get("video_prompt", ""):
-                errs.append(f"{sid} 有台词但 video_prompt 里没写台词原文")
+            core = re.sub(r"[^一-鿿]", "", dl.get("text", ""))
+            if core and core[:4] in re.sub(r"[^一-鿿]", "", s.get("video_prompt", "")):
+                errs.append(f"{sid} video_prompt 里写了台词原文，视频模型会把它画成字幕，删掉")
         for f in ("image_prompt", "video_prompt"):
             m = BANNED.search(s.get(f, ""))
             if m:
@@ -84,6 +88,10 @@ def check_script(sc, brief):
                 errs.append(f"{sid} 道具「{pp}」不在道具表里")
         if d > 10:
             warns.append(f"{sid} {d}s 偏长，视频模型越长越容易变形")
+    nlines = sum(1 for s in shots if s.get("dialogue"))
+    need = int(brief.get("dialogue_min", round(total / 12)))   # 写作铁律第 5 条：有对话的戏一分钟约 6~10 句；纯画面短片在 brief 里写 dialogue_min: 0
+    if nlines < need:
+        errs.append(f"全片只有 {nlines} 句台词，{total:.0f} 秒至少要 {need} 句（人物要靠说话推进故事）")
     return errs, warns
 
 
@@ -92,7 +100,8 @@ SUPERVISOR = """你是场记（script supervisor），审查下面这份分镜�
 2. 道具连续：同一道具每镜的描述是否一致；有没有道具凭空出现或消失。
 3. 人物连续：服装、位置、朝向前后是否接得上；有没有角色表以外的人。
 4. 叙事：每镜是否推动故事；台词是否符合人物；结尾是否落在主题上。
-5. 节奏：有没有拖沓的镜头（同一信息拍了两遍、动作太少却给了很长时间）；有没有多余或重复的台词。
+5. 节奏：有没有拖沓的镜头（同一信息拍了两遍）；有没有多余或重复的台词；有没有没意义的手部/道具特写、把一个简单动作切成好几个镜头。
+7. 常识：动作是否符合物理和生活常识（看纸看正面、道具状态前后一致、谁拿着什么不来回变）。
 6. 剪辑连贯：镜头之间是否按动作/视线接上，方位和轴线是否一致。
 只输出 JSON：{{"ok":true,"problems":["镜号：具体问题和改法"]}}。只列真问题，没有就空列表。
 分镜表：{script}"""
@@ -127,11 +136,15 @@ def cmd_script(pj, args):
                 fix = "\n\n用户对上一版的修改意见（必须全部落实，故事内核不变）：" + args["notes"] + fix
             if args.get("prev"):
                 fix = "\n\n上一版分镜表（在它基础上按意见改）：" + json.dumps(pj.load(args["prev"]), ensure_ascii=False)[:12000] + fix
-            sc = chat([{"role": "user", "content": SCRIPT_PROMPT.format(req=brief.get("requirement", ""), story=brief.get("story", "无"),
+            sc = chat([{"role": "user", "content": SCRIPT_PROMPT.format(req=brief.get("requirement", ""), story=brief.get("story", "无"), rules=RULES,
                                                                           ref_desc=ref_desc, dur=brief.get("duration", 60)) + fix}], json_out=True)
             last_err, _ = check_script(sc, brief)
             if not last_err:
                 last_err = supervise(sc)
+            if not last_err:          # 观众视角审读：复述得出故事、没有废镜头和不自然的台词才算过
+                rv = review_text("分镜表", json.dumps([{k: s.get(k) for k in ("id", "action", "dialogue", "duration", "caption")} for s in sc.get("shots", [])], ensure_ascii=False), brief)
+                pj.log(f"分镜表观众审读：{'过' if rv['pass'] else '不过'}；复述：{rv['retell'][:120]}")
+                last_err = rv["problems"]
             pj.log(f"剧本第 {attempt + 1} 版：{len(sc.get('shots', []))} 镜，问题 {len(last_err)} 个 " + "；".join(last_err)[:200])
             if not last_err:
                 break
@@ -291,11 +304,11 @@ def crop_916(path):
 
 
 def needs_keyframe(sc, s):
-    """要单独画首帧的镜头：每个场景的第一镜、要藏住东西的、全景/揭底这类构图要卡准的、或分镜表里标了 keyframe 的。
-    和上一镜连续的用上一镜最后一帧；其余镜头直接拿角色设定卡+场景图生成视频，不单独画（省 gpt-image 额度）。"""
+    """要单独画首帧的镜头：有角色出镜的（10-18 实测只给参考图直接生视频基本出不来）、每个场景的第一镜、要藏住东西的、全景，或标了 keyframe 的。
+    和上一镜连续的用上一镜最后一帧；剩下没有角色的空镜直接拿场景图生成视频。"""
     if s.get("continuous_from"):
         return False
-    if s.get("keyframe") or s.get("hide") or s.get("shot_size") in ("全景", "大远景"):
+    if s.get("characters") or s.get("keyframe") or s.get("hide") or s.get("shot_size") in ("全景", "大远景"):
         return True
     same = [x for x in sc["shots"] if x.get("scene") == s.get("scene")]
     return bool(same) and same[0]["id"] == s["id"]

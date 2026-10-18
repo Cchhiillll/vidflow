@@ -841,3 +841,43 @@ def cmd_qc(pj, args):
     pj.save("final/qc.json", {"errors": errs, "lufs": lufs, "dialogue": heard, "identity": ident, "sha256": sha, "file": out})
     pj.set("qc", "passed" if not errs else "failed", {"errors": errs, "sha256": sha})
     print(("✅ 成片检查通过，可以交给用户看：" if not errs else "❌ 成片没过检查：\n- " + "\n- ".join(errs) + "\n文件：") + out + f"\nsha256 {sha[:16]}")
+
+
+
+def cmd_review(pj, args):
+    """交付前的音画核对图（10-18 用户：新加和修改的镜头交付前要全面检查）：
+    每个有台词的镜头按 0.25 秒截帧，有声音的帧标红「声」，存到 final/review/<镜号>.jpg；另出一张全片每秒一帧总览。
+    导演逐张看：标「声」的帧嘴必须在动，嘴在动的帧必须标「声」，动作合乎常识。"""
+    from PIL import Image, ImageDraw, ImageFont
+    sc = pj.load("script/script.json"); P = pj.load("audio/placement.json")
+    video = pj.p("final", f"{os.path.basename(pj.dir)}.mp4")
+    out = pj.p("final", "review"); os.makedirs(out, exist_ok=True)
+    font = ImageFont.truetype("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 18)
+    off, t = {}, 0.0
+    for s in sc["shots"]:
+        off[s["id"]] = t; t += float(s["duration"])
+    only = set(args.get("shots") or [])
+    files = []
+    for s in sc["shots"]:
+        sid = s["id"]
+        if (only and sid not in only) or (not only and sid not in P):
+            continue
+        a0 = P.get(sid, {}).get("start", -1); a1 = a0 + P.get(sid, {}).get("dur", 0)
+        ims = []
+        for i in range(int(float(s["duration"]) / 0.25)):
+            x = 0.1 + i * 0.25
+            tmp = pj.p("final", "review", "_f.jpg")
+            sh("ffmpeg", "-v", "error", "-y", "-ss", f"{off[sid] + x:.2f}", "-i", video, "-frames:v", "1", "-vf", "scale=160:-1", tmp, check=True)
+            im = Image.open(tmp).convert("RGB"); on = a0 <= x <= a1
+            ImageDraw.Draw(im).text((3, 2), f"{x:.2f}{' 声' if on else ''}", fill="red" if on else "yellow", font=font, stroke_width=2, stroke_fill="black")
+            ims.append(im)
+        if not ims:
+            continue
+        cols = 8; w, h = ims[0].size; rows = (len(ims) + cols - 1) // cols
+        sheet = Image.new("RGB", (w * cols, h * rows + 30), "white")
+        ImageDraw.Draw(sheet).text((6, h * rows + 4), f"{sid}  {(s.get('dialogue') or {}).get('text', '')}  {s['action'][:40]}", fill="black", font=font)
+        for i, im in enumerate(ims):
+            sheet.paste(im, ((i % cols) * w, (i // cols) * h))
+        f = os.path.join(out, f"{sid}.jpg"); sheet.save(f, quality=82); files.append(f)
+    pj.log(f"音画核对图 {len(files)} 张：{out}")
+    print("\n".join(files))

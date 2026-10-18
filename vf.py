@@ -19,6 +19,7 @@
   vf reframe <项目> --shot s01 --take t2 --top 0 --height 0.65   某镜露了不该露的：取一部分画面放大（剪辑常规做法）
   vf sync <项目>                           对口型：看画面里嘴动的时间放台词；对不上的镜头列出来重做
   vf mix <项目> [--music 文件]             合成：统一规格拼接、环境声交叉淡化、对白、配乐、字幕、水印
+  vf review <项目> [--shots s01,s02]       交付前音画核对图（每 0.25 秒一帧，标出有声音的帧）
   vf qc <项目>                             ★ 成片检查（画幅/响度/每句台词听写/每镜角色比对）→ 过了把成片发给用户
   vf log <项目> [行数]                     看后台运行的日志
 """
@@ -126,7 +127,7 @@ def dispatch(cmd, pj, opt):
     if cmd in ("script", "cast", "boards"):
         import vf_pre
         return getattr(vf_pre, "cmd_" + cmd)(pj, opt)
-    if cmd in ("voices", "voice", "clips", "reframe", "sync", "mix", "qc"):
+    if cmd in ("voices", "voice", "clips", "reframe", "sync", "mix", "qc", "review"):
         import vf_post
         return getattr(vf_post, "cmd_" + cmd)(pj, opt)
     raise SystemExit(f"没有这个命令：{cmd}\n" + __doc__)

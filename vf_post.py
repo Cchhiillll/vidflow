@@ -7,7 +7,11 @@ FPS = 24
 
 
 def ref_for(pj, c):
-    """角色比对基准：有原图用原图，没有就用它的设定卡。"""
+    """角色比对基准：设定卡用户确认过就用设定卡（服装造型以它为准；10-18 第2集锦山换了白西装，拿第1集酒红西装原图比，条条判不过）；
+    否则有原图用原图，没有就用设定卡。"""
+    sheet = pj.p("cast", f"{c}_sheet.png")
+    if pj.state().get("cast", {}).get("status") == "approved" and os.path.exists(sheet):
+        return sheet
     r = pj.load("brief.json").get("refs", {}).get(c)
     r = (r if isinstance(r, list) else [r]) if r else []
     return r[0] if r else pj.p("cast", f"{c}_sheet.png")

@@ -17,7 +17,8 @@ def _key():
 
 
 def _call(model, messages, voice, dest, tries=4):
-    body = {"model": model, "messages": messages, "audio": {"format": "mp3"}}
+    fmt = "wav" if dest.endswith(".wav") else "mp3"   # 要 wav 就拿无损的（10-18：mp3 输出明显发闷，Hermes 用 wav 的克隆质量好得多）
+    body = {"model": model, "messages": messages, "audio": {"format": fmt}}
     if voice:
         body["audio"]["voice"] = voice
     last = None
@@ -44,7 +45,7 @@ def design(desc, text, dest):
 def clone(ref_audio, direction, text, dest):
     """用参考音的声音念 text；direction 是这句的表演指导。"""
     b64 = base64.b64encode(open(ref_audio, "rb").read()).decode()
-    mime = "audio/wav" if ref_audio.endswith(".wav") else "audio/mp3"
+    mime = "audio/wav" if ref_audio.endswith(".wav") else "audio/mpeg" if ref_audio.endswith(".mp3") else "audio/mp3"
     return _call("mimo-v2.5-tts-voiceclone", [{"role": "user", "content": direction}, {"role": "assistant", "content": text}],
                  f"data:{mime};base64,{b64}", dest)
 

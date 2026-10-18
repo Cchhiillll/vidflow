@@ -282,16 +282,133 @@ def voice_ref(pj, c, spec, desc, audition_text):
     if spec in PRESET_REFS:
         b64 = f"{HOME}/.hermes/assets/{PRESET_REFS[spec]}.mp3.b64"
         open(ref, "wb").write(base64.b64decode(open(b64).read().strip())); return ref, f"已有克隆音色 {spec}"
-    vf_voice.design(desc, audition_text, ref); return ref, "按描述设计"
+    female = bool(re.search("女|少女|姑娘|阿姨", desc or "")) and not re.search("男", (desc or "")[:6])
+    lo, hi = (150, 330) if female else (70, 190)
+    cands = []
+    for k in range(3):              # 设计音色每次都不一样：出 3 个候选，按「念得对 + 音高在该性别区间」客观挑一个当参考
+        f = pj.p("cast", f"voice_{c}_design{k}.wav")
+        try:
+            vf_voice.design(desc, audition_text, f)
+        except Exception as e:
+            pj.log(f"设计声音 {c} 第 {k + 1} 个失败：{str(e)[:80]}"); continue
+        sim = same_line(asr(f), audition_text); f0 = f0_median(f)
+        ok = lo <= f0 <= hi
+        cands.append((sim + (0.3 if ok else 0), f, sim, f0))
+        pj.log(f"设计声音 {c} 候选 {k + 1}：读音相似 {sim:.0%}，音高 {f0:.0f}Hz（{'在' if ok else '不在'}{'女' if female else '男'}声区间）")
+    if not cands:
+        raise RuntimeError(f"{c} 的声音设计全部失败")
+    best = max(cands)
+    sh("ffmpeg", "-v", "error", "-y", "-i", best[1], "-ar", "24000", "-ac", "1", ref, check=True)
+    return ref, f"按描述设计（3 选 1：读音 {best[2]:.0%}，音高 {best[3]:.0f}Hz）"
 
 
 def say(pj, c, direction, text, dest):
-    """按角色定好的声音念：固定音色或克隆参考。"""
+    """按角色定好的声音直接念一段（试音、长段落合成用）：固定音色或克隆参考。"""
     import vf_voice
     pf = pj.p("cast", f"voice_{c}.json")
     if os.path.exists(pf):
         return vf_voice.preset(json.load(open(pf))["preset"], direction, text, dest)
     return vf_voice.clone(pj.p("cast", f"voice_{c}.mp3"), direction, text, dest)
+
+
+def voice_style(sc, c):
+    """克隆/固定音色的人物描述（Hermes 实测：不给「用某某（性格）的语调说话」，模型念得很平）。分镜表角色可写 voice_style 覆盖。"""
+    ch = next((x for x in sc.get("characters", []) if x["name"] == c), {})
+    if ch.get("voice_style"):
+        return ch["voice_style"]
+    return f"用{c}（{ch.get('voice_desc') or '自然'}）的语调说话，普通话标准，咬字清晰纯正"
+
+
+def f0_median(path):
+    """粗测说话音高中位数（Hz），用来查声音有没有漂（男声跑成女声、忽高忽低）。只用 numpy 自相关，够分辨大偏差。"""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"], capture_output=True).stdout
+    x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
+    fr, hop, out = 640, 320, []
+    for k in range(0, len(x) - fr, hop):
+        w = x[k:k + fr] - x[k:k + fr].mean()
+        if np.sqrt((w ** 2).mean()) < 0.02:
+            continue
+        ac = np.correlate(w, w, "full")[fr - 1:]
+        lo, hi = 16000 // 400, 16000 // 70
+        lag = lo + int(np.argmax(ac[lo:hi]))
+        if ac[lag] > 0.3 * ac[0]:
+            out.append(16000 / lag)
+    return float(np.median(out)) if len(out) >= 5 else 0.0
+
+
+def _char_times(path):
+    """faster-whisper 逐字时间：[(字, 起, 止)]。"""
+    asr(path)
+    segs, _ = _asr[0].transcribe(path, language="zh", beam_size=5, word_timestamps=True,
+                                 initial_prompt="以下是普通话的句子，使用简体中文。", condition_on_previous_text=False)
+    out = []
+    for s in segs:
+        for w in s.words:
+            t = norm_zh(w.word)
+            for i2, ch in enumerate(t):
+                out.append((ch, w.start + (w.end - w.start) * i2 / max(1, len(t)), w.end))
+    return out
+
+
+def _silences(path, db=-38, d=0.12):
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", path, "-af", f"silencedetect=n={db}dB:d={d}", "-f", "null", "-"], capture_output=True, text=True).stderr
+    st = [float(x) for x in re.findall(r"silence_start: ([0-9.]+)", r)]; en = [float(x) for x in re.findall(r"silence_end: ([0-9.]+)", r)]
+    return list(zip(st, en))
+
+
+def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=5):
+    """录一句片中台词（10-18 定稿做法，用户认可的质量）：
+    短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
+    再按逐字时间把这一句剪出来；每次都听写核对（读音一致、不多字）、查音高没漂，最多录 tries 次挑最好的。
+    返回 (成功, 听写, 相似度, 说明)。"""
+    n = len(norm_zh(text)); best = None
+    lead = (lead or "").strip()
+    style = voice_style(sc, c)
+    for k in range(tries):
+        full, cut = pj.p("audio", f"{sid}_full{k}.wav"), pj.p("audio", f"{sid}_take{k}.wav")
+        try:
+            say(pj, c, style, (lead + text) if lead else text, full)
+        except Exception as e:
+            pj.log(f"对白 {sid} 第 {k + 1} 次合成失败：{str(e)[:80]}"); continue
+        start = 0.0
+        if lead:
+            ch = _char_times(full)
+            if len(ch) < n:
+                continue
+            t0 = ch[-n][1]
+            gaps = [(a, b) for a, b in _silences(full) if t0 - 0.8 <= b <= t0 + 0.35]
+            start = max(0.0, (gaps[-1][1] - 0.06) if gaps else t0 - 0.08)
+        sh("ffmpeg", "-v", "error", "-y", "-i", full, "-ss", f"{start:.3f}", "-af",
+           "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,afade=t=in:d=0.015",
+           "-ar", "48000", "-ac", "1", cut, check=True)
+        heard = asr(cut); sim = same_line(heard, text)
+        extra = len(norm_zh(heard)) > n + 1
+        f0 = f0_median(cut)
+        drift = bool(ref_f0 and f0 and abs(f0 - ref_f0) / ref_f0 > 0.35)
+        score = sim - (0.5 if extra else 0) - (0.3 if drift else 0)
+        pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
+        if best is None or score > best[0]:
+            best = (score, cut, heard, sim, f0)
+        if sim >= 0.99 and not extra and not drift:
+            break
+    if not best or best[0] < 0.85:
+        return False, best[2] if best else "", best[3] if best else 0.0, "录不出合格的一版"
+    sh("ffmpeg", "-v", "error", "-y", "-i", best[1], "-af", "loudnorm=I=-19:TP=-1.5", "-ar", "48000", "-ac", "1", dest, check=True)
+    for f in os.listdir(pj.p("audio")):
+        if f.startswith(f"{sid}_full") or f.startswith(f"{sid}_take"):
+            os.remove(pj.p("audio", f))
+    return True, best[2], best[3], f"音高 {best[4]:.0f}Hz"
+
+
+def line_lead(sc, s):
+    """这句台词的「前文」：分镜表 dialogue.lead 优先（同一角色、同一情绪、在这句之前会说的话，只用来带出语气，不进成片）；
+    没写就用同一场戏里前面两句台词。"""
+    dl = s.get("dialogue") or {}
+    if dl.get("lead"):
+        return dl["lead"]
+    prev = [x["dialogue"]["text"] for x in sc["shots"][:sc["shots"].index(s)] if x.get("dialogue") and x.get("scene") == s.get("scene")]
+    return "".join(prev[-2:])
 
 
 def cmd_voices(pj, args):
@@ -322,12 +439,24 @@ def cmd_voices(pj, args):
         desc = next(x for x in sc["characters"] if x["name"] == c).get("voice_desc", "")
         spec = (brief.get("voices") or {}).get(c, "")
         ref, how = voice_ref(pj, c, spec, desc, text)
+        ref_f0 = f0_median(ref) if ref else 0.0
+        json.dump({"ref_f0": ref_f0, "how": how}, open(pj.p("cast", f"voice_{c}_meta.json"), "w"), ensure_ascii=False)
+        os.makedirs(pj.p("audio"), exist_ok=True)
+        parts, heard_all, sims = [], [], []
+        for s in mine[:3]:          # 试音 = 这个角色在片里的前几句，按成片的录法录
+            tmp = pj.p("cast", f"voice_{c}_{s['id']}_试.wav")
+            ok, heard, sim, note = say_line(pj, sc, s["id"] + "_试", c, s["dialogue"]["text"], line_lead(sc, s), tmp, ref_f0)
+            if ok:
+                parts.append(tmp); heard_all.append(heard); sims.append(sim)
         aud = pj.p("cast", f"voice_{c}_试音.mp3")
-        say(pj, c, mine[0]["dialogue"].get("direction", ""), text, aud)
-        heard = asr(aud); sim = same_line(heard, "".join(s["dialogue"]["text"] for s in mine[:2]))
-        report[c] = {"how": how, "desc": desc, "audition": aud, "heard": heard, "match": round(sim, 2)}
-        pj.log(f"选角 {c}：{how}，试音听写相似 {sim:.0%}（{heard}）")
-        if sim < 0.6:
+        if parts:
+            open(pj.p("cast", "_l.txt"), "w").write("".join(f"file '{x}'\n" for x in parts))
+            sh("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", pj.p("cast", "_l.txt"), "-af", "apad=pad_dur=0.5",
+               "-c:a", "libmp3lame", "-b:a", "192k", aud, check=True)
+        sim = min(sims) if sims else 0.0; heard = " / ".join(heard_all)
+        report[c] = {"how": how, "desc": desc, "audition": aud, "heard": heard, "match": round(sim, 2), "ref_f0": round(ref_f0)}
+        pj.log(f"选角 {c}：{how}，试音 {len(parts)}/{min(3, len(mine))} 句合格，最低读音相似 {sim:.0%}（{heard}）")
+        if len(parts) < min(3, len(mine)) or sim < 0.85:
             fails.append(c)
     pj.set("voices", "awaiting_approval" if not fails else "failed", {"detail": report, "fails": fails})
     print(("✅ 试音做好了，请用户听后确认（vf approve <项目> voices）：" if not fails else "❌ 这些角色的试音念错了：" + "、".join(fails) + "\n") +
@@ -351,23 +480,12 @@ def cmd_voice(pj, args):
         prev = old_lines.get(sid)
         if prev and prev.get("text") == dl["text"] and prev.get("ref_mtime") == os.path.getmtime(ref) and prev.get("match", 0) >= 0.7:
             lines[sid] = prev; continue
-        raw, clean = pj.p("audio", f"{sid}_raw.mp3"), pj.p("audio", f"{sid}_clean.wav")
-        base = tts_text(dl["text"]); wp = with_pause(base)
-        ok_tts, heard, sim = False, "", 0.0
-        for k, vt in enumerate([base, wp, base, wp, wp]):
-            try:
-                say(pj, c, dl.get("direction", ""), vt, raw)
-            except Exception as e:
-                heard = str(e)[:80]; continue
-            sh("ffmpeg", "-v", "error", "-y", "-i", raw, "-af",
-               "silenceremove=start_periods=1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse",
-               "-ar", "48000", "-ac", "1", clean, check=True)
-            heard = asr(clean); sim = same_line(heard, dl["text"])
-            if sim >= 0.7:
-                ok_tts = True; break
-            pj.log(f"对白 {sid} 第 {k + 1} 次念得不对（{heard}），重录")
+        clean = pj.p("audio", f"{sid}_clean.wav")
+        meta = pj.p("cast", f"voice_{c}_meta.json")
+        ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
+        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0)
         if not ok_tts:
-            fails.append(f"{sid} 录了 5 次都念不对（最后一次听写「{heard}」）"); continue
+            fails.append(f"{sid} 录了 5 次都不合格（最后听写「{heard}」）"); continue
         lines[sid] = {"file": os.path.basename(clean), "dur": round(probe(clean)["dur"], 3), "speaker": c, "text": dl["text"],
                       "offscreen": bool(dl.get("offscreen")), "asr": heard, "match": round(sim, 2), "ref_mtime": os.path.getmtime(ref)}
         pj.log(f"对白 {sid}：{c} {lines[sid]['dur']:.1f}s 听写相似 {sim:.0%}")

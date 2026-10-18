@@ -232,6 +232,8 @@ def set_asr_names(sc):
     extra = re.findall(r"[一-鿿]{2}", "".join(n for n in names))
     places = [re.sub(r"(酒吧|大门|出口|门廊|街口)$", "", x["name"]) for x in sc.get("scenes", [])]   # 地名也提示（10-18 第2集「赛蕾娜」被听成「瑟琳娜」）
     ASR_NAMES[0] = ("人名、地名：" + "、".join(dict.fromkeys((names + ["一马", "锦", "由美", "堂岛", "桐生"] if "桐生" in names else names) + places)) + "。") if names else ""
+    if sc.get("asr_hints"):      # 分镜表可写容易被听错的词（10-18 第2集：「两清」听成「领轻」、「白蹲」听成「白顿」）
+        ASR_NAMES[0] += "常用词：" + "、".join(sc["asr_hints"]) + "。"
 
 
 def asr(path):

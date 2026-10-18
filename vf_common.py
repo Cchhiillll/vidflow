@@ -286,7 +286,7 @@ class Project:
 STAGE_ZH = {"story": "故事方案", "screenplay": "剧本", "script": "分镜表", "cast": "角色/场景/道具设定卡", "voices": "角色音色（试音）",
             "boards": "分镜首帧", "voice": "录全部台词", "clips": "生成视频片段", "sync": "对口型", "mix": "合成成片", "qc": "成片检查"}
 STATUS_ZH = {"approved": "已确认", "passed": "已通过检查", "awaiting_approval": "等确认", "failed": "没过", "running": "进行中"}
-REVIEW_GATES = "音色、新角色卡/场景卡/道具卡、分镜首帧（按剧情顺序连起来看）、生成好的视频和配音、成片"
+REVIEW_GATES = "音色、新角色卡/场景卡/道具卡、分镜首帧（按剧情顺序连起来看）、生成好的视频和配音、成片。每次交付视频前先跑 vf review，逐张看完核对图（标「声」的帧嘴在动、嘴在动的帧有声、动作合乎常识）才发"
 
 
 def write_handoff(pj):

@@ -230,7 +230,8 @@ ASR_NAMES = [""]     # 片里的人名提示给听写（10-18：「锦山」被�
 def set_asr_names(sc):
     names = [c["name"] for c in sc.get("characters", [])]
     extra = re.findall(r"[一-鿿]{2}", "".join(n for n in names))
-    ASR_NAMES[0] = ("人名：" + "、".join(dict.fromkeys(names + ["一马", "锦", "由美", "堂岛", "桐生"] if "桐生" in names else names)) + "。") if names else ""
+    places = [re.sub(r"(酒吧|大门|出口|门廊|街口)$", "", x["name"]) for x in sc.get("scenes", [])]   # 地名也提示（10-18 第2集「赛蕾娜」被听成「瑟琳娜」）
+    ASR_NAMES[0] = ("人名、地名：" + "、".join(dict.fromkeys((names + ["一马", "锦", "由美", "堂岛", "桐生"] if "桐生" in names else names) + places)) + "。") if names else ""
 
 
 def asr(path):

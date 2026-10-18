@@ -396,7 +396,7 @@ def _rate_ok(dur, text, direction=""):
     台词带「……」或表演指导写了慢/轻声/一字一顿/自言自语的放宽到 0.6 秒。"""
     n = max(1, len(norm_zh(text)))
     slow = "……" in text or bool(re.search("慢|轻声|很轻|一字一顿|一字一句|自言自语|几乎说不出", direction or ""))
-    return dur / n <= (0.6 if slow else 0.36)
+    return dur <= (0.6 if slow else 0.36) * n + 0.4      # +0.4 秒：短句前后的起音收尾和句中停顿（「有种，你就开枪」6 个字要 2.5 秒左右）
 
 
 def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""):

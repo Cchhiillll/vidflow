@@ -672,6 +672,15 @@ def ass_time(t):
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
+def sub_wrap(t, n=13):
+    """字幕超过 n 个字就在最靠中间的标点处折成两行（10-18：长台词一行排不下，两头被截掉）。"""
+    if len(t) <= n:
+        return t
+    cuts = [i + 1 for i, ch in enumerate(t[:-1]) if ch in "，。？！、；…"]
+    k = min(cuts, key=lambda i: abs(i - len(t) / 2)) if cuts else len(t) // 2
+    return t[:k] + "\\N" + t[k:]
+
+
 def cmd_mix(pj, args):
     pj.require("sync")
     sc, brief = pj.load("script/script.json"), pj.load("brief.json")
@@ -700,7 +709,7 @@ def cmd_mix(pj, args):
     BED = {"rain": "anoisesrc=color=pink:amplitude=0.22:sample_rate=48000,highpass=f=350,lowpass=f=9000,volume=0.9[a];"
                    "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=180,volume=0.35[b];[a][b]amix=inputs=2:normalize=0",
            "street": "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=260,volume=0.4",
-           "room": "anoisesrc=color=brown:amplitude=0.12:sample_rate=48000,lowpass=f=300,volume=0.25",
+           "room": "anoisesrc=color=brown:amplitude=0.2:sample_rate=48000,lowpass=f=320,volume=0.9",   # 10-18：原来太低，停顿处像声音断了
            "none": "anullsrc=r=48000:cl=mono"}
     parts = []
     for s in shots:
@@ -759,12 +768,12 @@ def cmd_mix(pj, args):
     sh("ffmpeg", "-v", "error", "-y", *ins, "-filter_complex", ";".join(fl), "-map", "[aout]", "-t", f"{total:.3f}", "-ar", "48000", audio, check=True)
     # 4) 字幕（只有台词）+ 水印
     ass = pj.p("final", "subs.ass")
-    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\n\n[V4+ Styles]\n"
+    head = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 720\nPlayResY: 1280\nWrapStyle: 0\n\n[V4+ Styles]\n"
             "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\n"
             "Style: D,Noto Sans CJK SC,52,&H00FFFFFF,&H00000000,&H64000000,0,0,1,2.2,0.6,2,40,40,170\n"
-            "Style: C,Noto Serif CJK SC,46,&H00F0F0F0,&H00000000,&H00000000,0,0,1,1.2,0,8,40,40,150\n\n[Events]\n"
+            "Style: C,Noto Serif CJK SC,44,&H00F0F0F0,&H00000000,&H90000000,0,0,3,10,0,8,60,60,150\n\n[Events]\n"
             "Format: Layer, Start, End, Style, Text\n")
-    ev = "".join(f"Dialogue: 0,{ass_time(offs[sid] + ln['start'])},{ass_time(offs[sid] + ln['start'] + ln['dur'] + 0.15)},D,{ln['text']}\n"
+    ev = "".join(f"Dialogue: 0,{ass_time(offs[sid] + ln['start'])},{ass_time(offs[sid] + ln['start'] + ln['dur'] + 0.15)},D,{sub_wrap(ln['text'])}\n"
                  for sid, ln in lines.items())
     # 画面字幕（时间地点、「十年后」）：放在画面上部，整镜显示，淡入淡出
     ev += "".join(f"Dialogue: 1,{ass_time(offs[s['id']] + 0.2)},{ass_time(offs[s['id']] + min(float(s['duration']) - 0.2, 3.5))},C,{{\\fad(300,300)}}{s['caption']}\n"

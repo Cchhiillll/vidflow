@@ -620,34 +620,62 @@ def cmd_mix(pj, args):
     sh("ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", vlist,
        "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},format=yuv420p",
        "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium", video, check=True)
-    # 2) 环境声：没有对白的镜头用它自己的原声；有对白的镜头原声里是模型的声音，换成从无对白镜头取的环境声，全片铺成一条
-    amb_src = next((s["id"] for s in shots if s["id"] not in lines), None)
+    # 2) 声音设计（10-18 教训：直接用视频模型自带的原声，会混进和画面无关的关门声、杂音）：
+    #    环境底噪按场景程序合成（雨夜/街道/室内），全场统一、换场淡入淡出；
+    #    事件声只在分镜表 sfx 标了的镜头出现：clip=用这一镜片段自带的声音（画面就是这个事件，声画同步）、siren=合成警笛（可跨镜头，按 gain 由远到近）。
+    def scene_amb(s):
+        scn = next((x for x in sc.get("scenes") or [] if x["name"] == s.get("scene")), {})
+        t_ = scn.get("ambience") or ("rain" if re.search(r"rain|雨", scn.get("look", ""), re.I) else "street" if re.search(r"street|街", scn.get("look", ""), re.I) else "room")
+        return t_
+    BED = {"rain": "anoisesrc=color=pink:amplitude=0.22:sample_rate=48000,highpass=f=350,lowpass=f=9000,volume=0.9[a];"
+                   "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=180,volume=0.35[b];[a][b]amix=inputs=2:normalize=0",
+           "street": "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=260,volume=0.4",
+           "room": "anoisesrc=color=brown:amplitude=0.12:sample_rate=48000,lowpass=f=300,volume=0.25",
+           "none": "anullsrc=r=48000:cl=mono"}
     parts = []
     for s in shots:
         sid, d = s["id"], float(s["duration"])
         seg = pj.p("final", f"amb_{sid}.wav")
-        src = pj.p("clips", picks[sid]["file"]) if sid not in lines or not amb_src else pj.p("clips", picks[amb_src]["file"])
-        vol = "1.0" if sid not in lines else "0.6"
-        sh("ffmpeg", "-v", "error", "-y", "-stream_loop", "-1", "-i", src, "-vn", "-t", f"{d:.3f}", "-af", f"volume={vol}",
-           "-ar", "48000", "-ac", "2", seg, check=True)
+        sh("ffmpeg", "-v", "error", "-y", "-filter_complex", BED[scene_amb(s)] + f",atrim=0:{d + 0.3:.3f},aformat=channel_layouts=stereo[o]",
+           "-map", "[o]", "-ar", "48000", seg, check=True)
         parts.append(seg)
-    alist = pj.p("final", "amb_list.txt"); open(alist, "w").write("".join(f"file '{p}'\n" for p in parts))
     amb = pj.p("final", "ambience.wav")
-    # 镜头之间环境声交叉淡化 0.25s，避免一刀切的断层
     xin, xf = [], []
-    for i, p_ in enumerate(parts):
+    for p_ in parts:
         xin += ["-i", p_]
     cur = "[0:a]"
-    for i in range(1, len(parts)):
-        xf.append(f"{cur}[{i}:a]acrossfade=d=0.25:c1=tri:c2=tri[x{i}]"); cur = f"[x{i}]"
+    for k2 in range(1, len(parts)):
+        same = scene_amb(shots[k2]) == scene_amb(shots[k2 - 1])
+        xf.append(f"{cur}[{k2}:a]acrossfade=d={0.3 if same else 0.8}:c1=tri:c2=tri[x{k2}]"); cur = f"[x{k2}]"
     if xf:
-        sh("ffmpeg", "-v", "error", "-y", *xin, "-filter_complex", ";".join(xf) + f";{cur}afade=t=in:d=0.6,apad[o]", "-map", "[o]",
+        sh("ffmpeg", "-v", "error", "-y", *xin, "-filter_complex", ";".join(xf) + f";{cur}afade=t=in:d=0.8,apad[o]", "-map", "[o]",
            "-t", f"{total:.3f}", amb, check=True)
     else:
-        sh("ffmpeg", "-v", "error", "-y", "-i", parts[0], "-af", "afade=t=in:d=0.6", amb, check=True)
+        sh("ffmpeg", "-v", "error", "-y", "-i", parts[0], "-af", "afade=t=in:d=0.8", amb, check=True)
+    sfx_ins, sfx_fl, sfx_tags = [], [], []
+    for s in shots:
+        for fx in s.get("sfx") or []:
+            st = offs[s["id"]] + float(fx.get("at", 0)); dur = float(fx.get("dur", s["duration"])); g = float(fx.get("gain", 0))
+            src = pj.p("final", f"sfx_{s['id']}_{fx['type']}.wav")
+            if fx["type"] == "clip":
+                sh("ffmpeg", "-v", "error", "-y", "-i", pj.p("clips", picks[s["id"]]["file"]), "-vn", "-ss", f"{fx.get('at', 0)}", "-t", f"{dur:.3f}",
+                   "-af", f"volume={g}dB,afade=t=out:st={max(0, dur - 0.3):.2f}:d=0.3", "-ar", "48000", "-ac", "2", src, check=True)
+            elif fx["type"] == "siren":
+                g2 = float(fx.get("gain_end", g))
+                sh("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                   f"aevalsrc='0.5*sin(2*PI*900*t-250/0.45*cos(2*PI*0.45*t))':s=48000:d={dur:.3f}", "-af",
+                   f"lowpass=f=2500,aecho=0.8:0.6:120:0.35,volume='{10 ** (g / 20):.4f}+({10 ** (g2 / 20):.4f}-{10 ** (g / 20):.4f})*t/{dur:.3f}':eval=frame,"
+                   f"afade=t=in:d=1.0,afade=t=out:st={max(0, dur - 1.0):.2f}:d=1.0", "-ac", "2", src, check=True)
+            else:
+                continue
+            ms = int(st * 1000)
+            sfx_ins += ["-i", src]; sfx_tags.append(ms)
     # 3) 对白、配乐混音
     ins, fl, mixin = ["-i", amb], [], ["[0:a]"]
     k = 1
+    for n_, ms in enumerate(sfx_tags):
+        ins += sfx_ins[2 * n_:2 * n_ + 2]
+        fl.append(f"[{k}:a]adelay={ms}|{ms},aformat=channel_layouts=stereo[f{k}]"); mixin.append(f"[f{k}]"); k += 1
     for sid, ln in lines.items():
         ins += ["-i", pj.p("audio", ln["file"])]
         ms = int((offs[sid] + ln["start"]) * 1000)

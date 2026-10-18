@@ -12,7 +12,7 @@ VIDEO_MODEL = "grok-imagine-video-1.5"
 # 临时只用某一个：VIDFLOW_IMAGE_BASE=... VIDFLOW_IMAGE_MODEL=...（密钥放 ~/.config/vidflow/image_api.key）。
 IMAGE_BASE = os.environ.get("VIDFLOW_IMAGE_BASE", CPA)
 W, H = 720, 1280            # 成片规格：9:16 竖屏
-STAGES = ["story", "screenplay", "script", "cast", "voices", "boards", "voice", "clips", "sync", "mix", "qc"]
+STAGES = ["intent", "story", "screenplay", "script", "cast", "voices", "boards", "voice", "clips", "sync", "mix", "qc"]
 
 
 def key():
@@ -283,10 +283,17 @@ class Project:
 
 
 
-STAGE_ZH = {"story": "故事方案", "screenplay": "剧本", "script": "分镜表", "cast": "角色/场景/道具设定卡", "voices": "角色音色（试音）",
+STAGE_ZH = {"intent": "立意", "story": "故事方案", "screenplay": "剧本", "script": "分镜表", "cast": "角色/场景/道具设定卡", "voices": "角色音色（试音）",
             "boards": "分镜首帧", "voice": "录全部台词", "clips": "生成视频片段", "sync": "对口型", "mix": "合成成片", "qc": "成片检查"}
 STATUS_ZH = {"approved": "已确认", "passed": "已通过检查", "awaiting_approval": "等确认", "failed": "没过", "running": "进行中"}
 REVIEW_GATES = "音色、新角色卡/场景卡/道具卡、分镜首帧（按剧情顺序连起来看）、生成好的视频和配音、成片。每次交付视频前先跑 vf review，逐张看完核对图（标「声」的帧嘴在动、嘴在动的帧有声、动作合乎常识）才发"
+
+
+def skipped(st, stage):
+    """老项目没有的前期步骤（比如 10-18 前的项目没有立意、故事开发）：后面的步骤已经做过，就算跳过，不当成卡在这一步。"""
+    if stage not in ("intent", "story", "screenplay") or stage in st:
+        return False
+    return any(t in st for t in STAGES[STAGES.index(stage) + 1:])
 
 
 def write_handoff(pj):
@@ -298,6 +305,8 @@ def write_handoff(pj):
     L = [f"# {b.get('title') or pj.name} · 进度说明", "",
          f"> 程序自动生成，最后更新 {dt.datetime.now():%m-%d %H:%M}。不要手改；要记的决定写进同目录 notes.md。", "",
          "## 这一集讲什么", b.get("episode") or b.get("story_core") or sc.get("logline") or "（未写）", ""]
+    if b.get("intent"):
+        L += [f"立意：{b['intent']}", ""]
     if sc.get("theme"):
         L += [f"想让观众感受到：{sc['theme']}", ""]
     if b.get("source"):
@@ -306,6 +315,8 @@ def write_handoff(pj):
     nxt = None
     for k in STAGES:
         v = st.get(k)
+        if not v and skipped(st, k):
+            continue
         if not v:
             nxt = nxt or k; L.append(f"| {STAGE_ZH.get(k, k)} | 没做 | | |"); continue
         rep = v.get("report") or {}
@@ -347,7 +358,7 @@ def write_story_doc(story_dir):
         if "state.json" in files and os.path.realpath(root) != os.path.realpath(story_dir):
             st = json.load(open(os.path.join(root, "state.json")))
             b = json.load(open(os.path.join(root, "brief.json"), encoding="utf-8")) if os.path.exists(os.path.join(root, "brief.json")) else {}
-            nxt = next((k for k in STAGES if (st.get(k) or {}).get("status") not in ("passed", "approved")), None)
+            nxt = next((k for k in STAGES if (st.get(k) or {}).get("status") not in ("passed", "approved") and not skipped(st, k)), None)
             last = max((v.get("at", "") for v in st.values() if isinstance(v, dict)), default="")
             rows.append(f"| {os.path.relpath(root, story_dir)} | {b.get('title', '')} | {('卡在/下一步：' + STAGE_ZH.get(nxt, nxt)) if nxt else '已完成'} | {last[5:16].replace('T', ' ')} |")
     L = [f"# {os.path.basename(story_dir)} · 故事说明", "", f"> 程序自动生成，最后更新 {dt.datetime.now():%m-%d %H:%M}。新会话先读这份，再进对应子文件夹读「进度说明.md」。", ""]

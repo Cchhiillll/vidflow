@@ -1,4 +1,7 @@
-"""前期·故事开发（行业流程：故事梗概/节拍表 → 剧本 → 分镜表）。写作用 CPA 上写作最强的模型（默认 gpt-6-astra）。
+"""前期·故事开发（行业流程：立意 → 故事梗概/节拍表 → 剧本 → 分镜表）。写作用 CPA 上写作最强的模型（默认 gpt-6-astra）。
+  vf intent <项目> [--notes 意见]         ★ 先定立意：3 个候选（一句话：想让观众感到什么、为什么值得看），等用户选
+  vf intent <项目> --set "立意"           导演自己写好的立意直接登记（仍要发用户过）
+  vf approve <项目> intent --pick 2       选定立意（写进 brief.json 的 intent，后面写故事、剧本、文案、审读都按它）
   vf story <项目> [--notes 意见]          出 3 个故事方案（梗概 + 节拍表 + 结尾落点），等用户选
   vf approve <项目> story --pick 2        选定方案
   vf screenplay <项目> [--notes 意见]     按选定方案写剧本（场景、动作、台词、潜台词、表演指导），等用户确认
@@ -25,10 +28,24 @@ RULES = """写作铁律（每条都要做到）：
 11. 同一场戏里人物和道具的状态前后一致（谁拿着枪就一直拿着、谁站在哪就一直在哪），不来回变。
 12. 动作符合物理和生活常识：人看纸看正面、开门要先转把手、枪响后人不会原地不动……每个动作都要像真实世界会发生的。"""
 
+# 10-18 教训：《如龙》第一版剧本、抖音文案都因为动笔前没有立意被用户否掉——写出来的东西没有中心，每句都在交代信息。
+INTENT = """你是资深电影监制。下面这部短片动笔写故事之前，先定「立意」：一句话说清想让观众看完感到什么、为什么这件事值得看。
+立意不是剧情梗概，不是主题词（「友情」「牺牲」），而是一个有态度、能让人心里一动的判断，比如「有人替你扛下十年，你就欠下了一辈子」。
+后面写故事、剧本、文案时，每一场戏、每一句台词都要为它服务；审读时按它检查。
+
+需求：{req}
+故事内核：{core}
+原作依据（改编作品必须忠于它；没有写「无」）：{source}
+本集任务（系列短片时本集只讲这一件事；没有写「无」）：{episode}
+修改意见：{notes}
+
+给 3 个不同方向的立意。只输出 JSON：{{"options":[{{"intent":"立意（一句话，30 字以内）","feel":"观众看完心里留下的感觉（具体）","why":"为什么值得看、和原作/本集任务怎么对上","scene":"最能落实这个立意的一场戏或一个画面"}}]}}"""
+
 STORY = """你是获奖短片编剧。为下面的需求开发 3 个不同的故事方案，用于一部约 {dur} 秒、竖屏、真人质感的 AI 短片（角色可以是拟人化动物，按参考图）。
 
 需求：{req}
 故事内核：{core}
+立意（每个方案都必须为它服务，结尾要让观众感到它）：{intent}
 原作依据（改编作品必须忠于它；没有写「无」）：{source}
 本集任务（系列短片时本集只讲这一件事；没有写「无」）：{episode}
 参考图里的主角与场景：{ref}
@@ -46,6 +63,7 @@ SCREENPLAY = """你是电影编剧。把选定的故事方案写成可以直接�
 
 选定方案：{option}
 目标时长约 {dur} 秒；参考图里的主角与场景：{ref}
+立意（每场戏、每句台词都为它服务；和它无关的删掉）：{intent}
 原作依据：{source}
 本集任务：{episode}
 修改意见：{notes}
@@ -60,23 +78,25 @@ SCREENPLAY = """你是电影编剧。把选定的故事方案写成可以直接�
 
 REVIEW = """你是挑剔的观众兼剧本医生，没看过原作。读下面这份{kind}，先用三句话复述你看到的故事（谁、想要什么、做了什么、结果怎样）。
 再对照写作铁律逐条挑问题，只挑真问题：看不懂或交代不清的地方；没有作用的场/镜头；台词总量和时长不匹配（约 {dur} 秒）；
-重复的台词、不像真人说话的台词、用道具代替说话；和原作依据冲突；本集任务没完成；结尾没力量。
+重复的台词、不像真人说话的台词、用道具代替说话；和原作依据冲突；本集任务没完成；结尾没力量；
+看完感受不到立意，或有场戏、台词和立意无关。
+立意：{intent}
 原作依据：{source}
 本集任务：{episode}
 """ + RULES + """
-只输出 JSON：{{"retell":"三句话复述","pass":true,"problems":["位置：问题和具体改法"]}}
+只输出 JSON：{{"retell":"三句话复述","felt":"你看完感到了什么（一句话，用来和立意对照）","pass":true,"problems":["位置：问题和具体改法"]}}
 {kind}：{text}"""
 
 
 def review_text(kind, text, brief):
     """观众视角审读：复述 + 按写作铁律挑问题。pass 且没有问题才算过。"""
     try:
-        r = chat([{"role": "user", "content": REVIEW.format(kind=kind, text=text, dur=brief.get("duration", 60), source=brief.get("source") or "无",
+        r = chat([{"role": "user", "content": REVIEW.format(kind=kind, text=text, dur=brief.get("duration", 60), source=brief.get("source") or "无", intent=brief.get("intent") or "无",
                                                               episode=brief.get("episode") or "无")}], model=WRITER, json_out=True, stream=True)
     except Exception as e:
         return {"retell": "", "pass": False, "problems": [f"审读失败：{e}"]}
     probs = [str(x) for x in (r.get("problems") or [])]
-    return {"retell": r.get("retell", ""), "pass": bool(r.get("pass")) and not probs, "problems": probs}
+    return {"retell": r.get("retell", ""), "felt": r.get("felt", ""), "pass": bool(r.get("pass")) and not probs, "problems": probs}
 
 
 def _ref(pj):
@@ -89,9 +109,34 @@ def _ref(pj):
     pj.save("script/ref_desc.json", {"desc": d}); return d
 
 
+def cmd_intent(pj, args):
+    """定立意：导演写好的用 --set 直接登记；否则出 3 个候选。都要发用户过（awaiting_approval）。"""
+    brief = pj.load("brief.json")
+    if isinstance(args.get("set"), str) and args["set"].strip():
+        opts = [{"intent": args["set"].strip(), "feel": args.get("feel") or "", "why": args.get("why") or "导演定", "scene": args.get("scene") or ""}]
+    else:
+        r = chat([{"role": "user", "content": INTENT.format(req=brief.get("requirement", ""), core=brief.get("story_core") or brief.get("story", ""),
+                                                            source=brief.get("source") or "无", episode=brief.get("episode") or "无", notes=args.get("notes") or "无")}],
+                 model=WRITER, json_out=True, stream=True)
+        opts = r.get("options", [])
+    pj.save("story/intent.json", opts)
+    L = ["# 立意", "", "动笔前先定：想让观众看完感到什么、为什么值得看。后面的故事、剧本、文案、审读都按选定的这一条。", ""]
+    for i, o in enumerate(opts, 1):
+        L += [f"## {i}. {o.get('intent')}", f"- 观众看完会感到：{o.get('feel')}", f"- 为什么值得看：{o.get('why')}", f"- 最能落实它的戏：{o.get('scene')}", ""]
+    open(pj.p("story/intent.md"), "w", encoding="utf-8").write("\n".join(L))
+    pj.set("intent", "awaiting_approval", {"n": len(opts)})
+    print(f"✅ 立意 {len(opts)} 条，请用户过（vf approve <项目> intent --pick 编号）：{pj.p('story/intent.md')}")
+
+
+def need_intent(pj, brief):
+    if not (brief.get("intent") or "").strip():
+        raise SystemExit("还没定立意：先 vf intent <项目>（或 --set \"立意\"），用户过了 vf approve <项目> intent --pick 编号")
+
+
 def cmd_story(pj, args):
     brief = pj.load("brief.json")
-    r = chat([{"role": "user", "content": STORY.format(dur=brief.get("duration", 55), req=brief.get("requirement", ""), core=brief.get("story_core") or brief.get("story", ""),
+    need_intent(pj, brief)
+    r = chat([{"role": "user", "content": STORY.format(dur=brief.get("duration", 55), req=brief.get("requirement", ""), core=brief.get("story_core") or brief.get("story", ""), intent=brief["intent"],
                                                        source=brief.get("source") or "无", episode=brief.get("episode") or "无", ref=_ref(pj), notes=args.get("notes") or "无")}], model=WRITER, json_out=True, stream=True)
     opts = r.get("options", [])
     pj.save("story/options.json", opts)
@@ -108,11 +153,12 @@ def cmd_story(pj, args):
 def cmd_screenplay(pj, args):
     pj.require("story", "approved")
     brief = pj.load("brief.json")
+    need_intent(pj, brief)
     opts = pj.load("story/options.json"); pick = int(pj.state()["story"]["report"].get("pick", 1))
     o = opts[pick - 1]
     notes, rv, r = args.get("notes") or "无", None, {}
     for rnd in range(3):            # 写完交给「观众」审读，不过就把问题当修改意见重写
-        r = chat([{"role": "user", "content": SCREENPLAY.format(option=json.dumps(o, ensure_ascii=False), dur=brief.get("duration", 55), ref=_ref(pj),
+        r = chat([{"role": "user", "content": SCREENPLAY.format(option=json.dumps(o, ensure_ascii=False), dur=brief.get("duration", 55), ref=_ref(pj), intent=brief["intent"],
                                                                 source=brief.get("source") or "无", episode=brief.get("episode") or "无", notes=notes)}],
                  model=WRITER, json_out=True, stream=True)
         rv = review_text("剧本", r.get("screenplay", "") + "\n台词表：" + json.dumps(r.get("dialogue", []), ensure_ascii=False), brief)
@@ -124,7 +170,7 @@ def cmd_screenplay(pj, args):
     L = [f"# {r.get('title')}", "", r.get("screenplay", ""), "", "## 台词表", "| 角色 | 台词 | 表演指导 | 潜台词 |", "|---|---|---|---|"]
     L += [f"| {d.get('speaker')} | {d.get('text')} | {d.get('direction')} | {d.get('subtext')} |" for d in r.get("dialogue", [])]
     L += ["", "## 音色", *[f"- {k}：{v}" for k, v in (r.get("voices") or {}).items()]]
-    L += ["", "## 观众审读", f"复述：{rv['retell']}", *[f"- {x}" for x in rv["problems"]]]
+    L += ["", "## 观众审读", f"立意：{brief['intent']}", f"观众复述：{rv['retell']}", f"观众感到：{rv.get('felt', '')}", *[f"- {x}" for x in rv["problems"]]]
     open(pj.p("story/screenplay.md"), "w", encoding="utf-8").write("\n".join(L))
     pj.set("screenplay", "awaiting_approval", {"pick": pick, "review_pass": rv["pass"], "review": rv["problems"]})
     print(("✅ 剧本写好并通过观众审读" if rv["pass"] else "⚠️ 剧本写了 3 轮仍有审读问题（导演判断后改或放行）：\n- " + "\n- ".join(rv["problems"]))

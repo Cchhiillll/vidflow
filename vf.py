@@ -8,6 +8,7 @@
 
 全部步骤（按顺序）：
   vf new <项目> --brief brief.json        建项目（需求、故事内核、时长、角色原图、音色、水印）
+  vf intent <项目> [--set "立意"|--notes] ★ 立意：动笔前先定「想让观众感到什么、为什么值得看」（选定后写进 brief，后面全按它）
   vf story <项目> [--notes 意见]           ★ 故事开发：3 个方案（梗概+节拍表+结尾落点）
   vf screenplay <项目> [--notes 意见]      ★ 剧本：场景、动作、台词、潜台词、表演指导
   vf script <项目> [--from 分镜表.json]    分镜表：按剧本拆镜头（节奏、连贯、反转前藏住、道具不自己动），自动检查+场记审查
@@ -25,9 +26,9 @@
 """
 import json, os, shutil, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vf_common import Project, STAGES
+from vf_common import Project, STAGES, skipped
 
-GATES = {"story": "story/options.md", "screenplay": "story/screenplay.md", "cast": "cast/（*_sheet.png、location.png）",
+GATES = {"intent": "story/intent.md", "story": "story/options.md", "screenplay": "story/screenplay.md", "cast": "cast/（*_sheet.png、location.png）",
          "voices": "cast/（voice_*_试音.mp3）", "boards": "boards/storyboard.jpg", "qc": "final/<项目>.mp4"}
 
 
@@ -71,7 +72,7 @@ def todo(pj):
     for i, s in enumerate(STAGES):
         if st.get(s, {}).get("status") in ("passed", "approved"):
             continue
-        if s in ("story", "screenplay") and s not in st and any(t in st for t in STAGES[i + 1:]):
+        if skipped(st, s):
             continue
         out.append(s)
     return out
@@ -95,7 +96,7 @@ def cmd_status(pj, opt):
         print("\n全部完成，成片：" + pj.p("final", f"{os.path.basename(pj.dir)}.mp4")); return
     x = st.get(nxt, {})
     if x.get("status") == "awaiting_approval":
-        print(f"\n下一步：把 {review_file(pj, nxt)} 发给用户看；用户确认后 vf approve {pj.name} {nxt}" + (" --pick 方案号" if nxt == "story" else ""))
+        print(f"\n下一步：把 {review_file(pj, nxt)} 发给用户看；用户确认后 vf approve {pj.name} {nxt}" + (" --pick 编号" if nxt in ("story", "intent") else ""))
     elif x.get("status") == "failed":
         print(f"\n下一步：「{nxt}」没过检查，问题：\n- " + "\n- ".join(map(str, (x.get("report") or {}).get("fails") or (x.get("report") or {}).get("errors") or ["见日志"]))
               + f"\n按问题改（改 script/script.json 或用 --shots 重做那几镜），再 vf bg {pj.name} auto")
@@ -112,8 +113,11 @@ def cmd_approve(pj, opt, stage):
     rep = dict(st.get("report") or {})
     if st.get("status") == "failed":
         rep["override"] = {"reason": over.strip(), "at": time.strftime("%m-%d %H:%M"), "fails": rep.get("fails")}
-    if stage == "story" and not opt.get("pick"):
-        raise SystemExit("选故事方案要带 --pick 方案号")
+    if stage in ("story", "intent") and not opt.get("pick"):
+        raise SystemExit(f"选{'故事方案' if stage == 'story' else '立意'}要带 --pick 编号")
+    if stage == "intent":            # 选定的立意写进 brief，写故事、剧本、文案、审读都从 brief 读
+        brief = pj.load("brief.json"); o = pj.load("story/intent.json")[int(opt["pick"]) - 1]
+        brief["intent"] = o["intent"]; brief["intent_detail"] = o; pj.save("brief.json", brief)
     if opt.get("pick"):
         rep["pick"] = int(opt["pick"])
     pj.set(stage, "approved", rep)
@@ -121,7 +125,7 @@ def cmd_approve(pj, opt, stage):
 
 
 def dispatch(cmd, pj, opt):
-    if cmd in ("story", "screenplay"):
+    if cmd in ("intent", "story", "screenplay"):
         import vf_story
         return getattr(vf_story, "cmd_" + cmd)(pj, opt)
     if cmd in ("script", "cast", "boards"):
@@ -138,7 +142,7 @@ def cmd_auto(pj, opt):
     for s in todo(pj):
         stt = pj.state().get(s, {}).get("status")
         if stt == "awaiting_approval":
-            print(f"⏸ 等用户确认「{s}」：把 {review_file(pj, s)} 发给用户；确认后 vf approve {pj.name} {s}" + (" --pick 方案号" if s == "story" else "")); return
+            print(f"⏸ 等用户确认「{s}」：把 {review_file(pj, s)} 发给用户；确认后 vf approve {pj.name} {s}" + (" --pick 编号" if s in ("story", "intent") else "")); return
         print(f"▶ {s}", flush=True)
         try:
             dispatch(s, pj, {})
@@ -148,7 +152,7 @@ def cmd_auto(pj, opt):
         if stt == "failed":
             print(f"⏹ 「{s}」没过检查，先按问题修再继续（vf status {pj.name} 看问题）"); return
         if stt == "awaiting_approval":
-            print(f"⏸ 等用户确认「{s}」：把 {review_file(pj, s)} 发给用户；确认后 vf approve {pj.name} {s}" + (" --pick 方案号" if s == "story" else "")); return
+            print(f"⏸ 等用户确认「{s}」：把 {review_file(pj, s)} 发给用户；确认后 vf approve {pj.name} {s}" + (" --pick 编号" if s in ("story", "intent") else "")); return
     print("✅ 全部完成：" + pj.p("final", f"{os.path.basename(pj.dir)}.mp4"))
 
 

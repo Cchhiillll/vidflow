@@ -385,7 +385,7 @@ def _lead_cut(full, lead, n):
     rate = (sp1 - sp0) / len(ch)                 # 每个字大约多少秒（含停顿）
     expect = n * rate
     t0 = ch[-n][1] if len(ch) >= n else ch[0][1]   # 按字数倒推的台词起点（听写漏字时会偏，只作参考）
-    cands = [((b - a) - 1.5 * abs(b - t0), a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.8 * expect <= sp1 - b <= 1.6 * expect]
+    cands = [((b - a) - 1.5 * abs(b - t0), a, b) for a, b in _silences(full, db=-40, d=0.08) if a > sp0 and 0.8 * expect <= sp1 - b <= 1.3 * expect]
     if cands:                                     # 停顿越长越像句子分界，离推算起点越近越可信（下限 0.8：句内停顿不会被当成分界）
         return max(0.0, max(cands)[2] - 0.06)
     return max(0.0, t0 - 0.08)

@@ -333,3 +333,27 @@ def write_handoff(pj):
     if os.path.exists(pj.p("notes.md")):
         L += ["## 备忘（notes.md）", open(pj.p("notes.md"), encoding="utf-8").read().strip(), ""]
     open(pj.p("进度说明.md"), "w", encoding="utf-8").write("\n".join(L))
+    parent = os.path.dirname(os.path.realpath(pj.dir))
+    if os.path.realpath(parent) != os.path.realpath(PROD):
+        write_story_doc(parent)
+
+
+def write_story_doc(story_dir):
+    """故事文件夹（一个故事一个文件夹：~/production/<故事>/）的总说明：讲什么、分几集/几个版本、每集做到哪。
+    故事层面的规划和决定写在同目录「故事备忘.md」，会原样带进来。"""
+    rows = []
+    for root, dirs, files in os.walk(story_dir):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("_") and d not in ("cast", "boards", "clips", "audio", "final", "script", "story", "logs", "refs"))
+        if "state.json" in files and os.path.realpath(root) != os.path.realpath(story_dir):
+            st = json.load(open(os.path.join(root, "state.json")))
+            b = json.load(open(os.path.join(root, "brief.json"), encoding="utf-8")) if os.path.exists(os.path.join(root, "brief.json")) else {}
+            nxt = next((k for k in STAGES if (st.get(k) or {}).get("status") not in ("passed", "approved")), None)
+            last = max((v.get("at", "") for v in st.values() if isinstance(v, dict)), default="")
+            rows.append(f"| {os.path.relpath(root, story_dir)} | {b.get('title', '')} | {('卡在/下一步：' + STAGE_ZH.get(nxt, nxt)) if nxt else '已完成'} | {last[5:16].replace('T', ' ')} |")
+    L = [f"# {os.path.basename(story_dir)} · 故事说明", "", f"> 程序自动生成，最后更新 {dt.datetime.now():%m-%d %H:%M}。新会话先读这份，再进对应子文件夹读「进度说明.md」。", ""]
+    if os.path.exists(os.path.join(story_dir, "故事备忘.md")):
+        L += [open(os.path.join(story_dir, "故事备忘.md"), encoding="utf-8").read().strip(), ""]
+    L += ["## 各集 / 各版本", "| 文件夹 | 标题 | 状态 | 最后更新 |", "|---|---|---|---|"] + rows + [""]
+    if os.path.isdir(os.path.join(story_dir, "共用设定")):
+        L += ["## 共用设定", f"各集共用的角色卡、原声、照片、场景卡、道具卡在 `{os.path.join(story_dir, '共用设定')}`；新开一集从这里复制到该集的 cast/ 和 refs/。", ""]
+    open(os.path.join(story_dir, "故事说明.md"), "w", encoding="utf-8").write("\n".join(L))

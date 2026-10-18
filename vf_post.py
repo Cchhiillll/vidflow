@@ -137,7 +137,8 @@ def cmd_clips(pj, args):
                       + (f"Do NOT show: {s['hide']}. " if s.get("hide") else "") + "Vertical 9:16, live-action film look. No subtitles, captions or any on-screen text overlaid on the picture.")
         ln = lines.get(sid)
         if ln and not (s.get("dialogue") or {}).get("offscreen"):
-            prompt += (f" Timing: the speaking character starts talking about 0.5 seconds into the shot and keeps talking continuously "
+            sa = float((s.get("dialogue") or {}).get("speak_at", 0.5))     # 分镜表可指定先做完动作再开口（10-18 s21：放下枪、举手之后才说话）
+            prompt += (f" Timing: the speaking character starts talking about {sa:.1f} seconds into the shot and keeps talking continuously "
                        f"for about {ln['dur']:.1f} seconds, mouth opening and closing on every syllable, then closes the mouth and stays silent.")
         good, bad = [], {}
         if args.get("recheck"):                        # 只用新规则重查已生成的片段，不花额度重新生成

@@ -168,7 +168,7 @@ def cmd_clips(pj, args):
         best, why = pick_best(s, good)
         final = pj.p("clips", f"{sid}.mp4")
         trim(best, float(s["duration"]), final)
-        return sid, os.path.basename(final), bad, why
+        return sid, os.path.basename(final), bad, why + (f"｜line_dur={ln['dur']:.2f}" if ln else "")
 
     shots = [s for s in sc["shots"] if not only or s["id"] in only]
     first = [s for s in shots if not s.get("continuous_from")]
@@ -627,6 +627,9 @@ def cmd_sync(pj, args):
         # 测嘴动靠模型框嘴的位置，每次框得不一样结果就会变（10-18：没动过的 s05/s06 这轮过、下轮不过）：
         # 同一片段的结果存下来不重测；判对不上之前再测两次取最长的那次
         key = f"{os.path.basename(clip)}:{os.path.getmtime(clip):.0f}"
+        m = re.search(r"line_dur=([0-9.]+)", picks[sid].get("why", ""))
+        if m and abs(float(m.group(1)) - ln["dur"]) > 0.3:     # 台词重录后时长变了，画面里的嘴还是按旧台词动的（10-18 s01/s13）
+            fails.append(f"{sid}：台词重录过（{float(m.group(1)):.1f}s→{ln[dur]:.1f}s），画面按旧台词生成，要重做这一镜（vf clips <项目> --shots {sid}）"); continue
         segs = cache.get(key)
         if segs is None:
             segs = mouth_activity(pj, s, clip, ln["speaker"]) or []
@@ -642,7 +645,7 @@ def cmd_sync(pj, args):
             fails.append(f"{sid}：画面里没看到{ln['speaker']}张嘴说话"); continue
         a, b = segs[0][0], segs[-1][1]               # 第一次开口到最后一次闭口
         wlen = b - a; ratio = ln["dur"] / max(wlen, 0.3)
-        tempo = max(0.88, min(1.12, ratio))
+        tempo = max(0.95, min(1.12, ratio))      # 放慢最多 5%（10-18：放慢 12% 听着拖沓，嘴也比声音多动）
         placed = pj.p("audio", f"{sid}_placed.wav")
         sh("ffmpeg", "-v", "error", "-y", "-i", src, "-af", f"atempo={tempo:.4f}", placed, check=True)
         pdur = probe(placed)["dur"]

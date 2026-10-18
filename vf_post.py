@@ -125,7 +125,9 @@ def cmd_clips(pj, args):
         src = s.get("continuous_from")
         if src and src in picks:                       # 连续镜头：用上一镜成片的最后一帧当首帧，接缝处是同一帧
             start = last_frame(pj.p("clips", picks[src]["file"]), pj.p("clips", f"{sid}_start.jpg"))
-        elif not os.path.exists(start):                # 没单独画首帧：拿角色原图/设定卡 + 场景图直接生成视频
+        elif not os.path.exists(start) and chars:      # 有角色出镜却没有首帧：不许退回「只给参考图」（10-19 第2集人物比例、尾巴、场景每镜都变）
+            return sid, None, {"no_keyframe": ["有角色出镜但没有首帧，先 vf boards <项目> --shots " + sid + "，用户看过再生成视频"]}, ""
+        elif not os.path.exists(start):                # 没单独画首帧的空镜：拿场景图直接生成视频
             scenes = sc.get("scenes") or []
             loc = pj.p("cast", f"location_{s.get('scene')}.png") if len(scenes) > 1 else pj.p("cast", "location.png")
             refs = [ref_for(pj, c) for c in chars] + [pj.p("cast", f"{c}_sheet.png") for c in chars] + [loc]

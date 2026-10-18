@@ -178,7 +178,9 @@ def gen_image(prompt, refs, dest, size="1024x1536"):
             continue
         for i in range(3):
             try:
-                return request(pv)
+                out = request(pv)
+                print(f"[出图] {os.path.basename(dest)} ← {pv['name']}（{pv['model']}）", file=sys.stderr, flush=True)   # 每张图记下是哪家出的
+                return out
             except urllib.error.HTTPError as e:
                 text = e.read().decode(errors="ignore")[:300]
                 errs.append(f"{pv['name']} HTTP {e.code} {text[:120]}")

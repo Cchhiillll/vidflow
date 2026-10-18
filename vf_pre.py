@@ -207,6 +207,16 @@ SHEET = ("Professional character design reference sheet (model sheet) for a live
          "Photorealistic rendering of the character in every panel, consistent lighting, no extra characters.")
 
 
+SCENE_SHEET = ("Professional location design sheet for a live-action short film, landscape layout on off-white paper, thin divider lines, small Chinese labels. "
+               "Location「{name}」: {look} It must be exactly the same place as the reference image (same furniture, colors, lighting). "
+               "Panels: (1) large establishing view, labeled 全景; (2) reverse-angle view of the same room/street from the opposite side, labeled 反打; "
+               "(3) a third view from the side, labeled 侧面; (4) a clean top-down floor plan sketch with labeled positions of every door, window, desk and wall, labeled 平面图; "
+               "(5) two close-up detail panels of key set pieces, labeled 细节. Photorealistic for the views, no people or animals anywhere.")
+PROP_SHEET = ("Professional prop design reference sheet for a live-action short film, landscape layout on off-white paper, thin divider lines, small Chinese labels. "
+              "Prop「{name}」: {look} Panels: front view, side view, top or back view, a detail close-up, and a scale view of the prop held in a white anthropomorphic cat paw. "
+              "Photorealistic product photography, consistent design in every panel, neutral lighting, nothing else in the frame.")
+
+
 def cmd_cast(pj, args):
     """角色设定卡（行业里的 model sheet）：一次生成一整张（三视图 + 表情 + 服装/配件拆解 + 细节 + 色板），保证卡内同一个角色；
     有原图的角色严格照原图画，并和原图比对。另出一张场景空镜。出完等用户确认。"""
@@ -273,6 +283,18 @@ def cmd_cast(pj, args):
             prompt = (f"Empty establishing plate, vertical composition, no people or animals: {scn['look']}. "
                       f"Match the photographic style, color grade and lighting quality of the reference photo. Photorealistic, no text.")
         gen_image(prompt, all_refs[:1], dest)
+    # 场景设定卡、道具设定卡（10-18 教训：只有一张空镜图和一句文字，同一把枪每镜长得不一样、办公室门窗位置来回变）
+    for scn in scenes:
+        loc = pj.p("cast", "location.png" if len(scenes) == 1 else f"location_{scn['name']}.png")
+        dest = pj.p("cast", f"scene_{scn['name']}.png")
+        if os.path.exists(dest):
+            continue
+        gen_image(SCENE_SHEET.format(name=scn["name"], look=scn["look"]), [loc] if os.path.exists(loc) else [], dest, "1536x1024")
+    for pr in sc.get("props", []):
+        dest = pj.p("cast", f"prop_{pr['name']}.png")
+        if os.path.exists(dest):
+            continue
+        gen_image(PROP_SHEET.format(name=pr["name"], look=pr["look"]), [], dest, "1536x1024")
     status = "awaiting_approval" if not fails else "failed"
     pj.set("cast", status, {"fails": fails, "detail": report})
     print(("✅ 角色设定卡和场景图做好了，请用户确认后 vf approve <项目> cast：" if not fails else "❌ 这些角色的设定卡和原图对不上：" + "、".join(fails) + "\n文件夹：") + pj.p("cast"))
@@ -360,8 +382,10 @@ def cmd_boards(pj, args):
         chars = s.get("characters", [])
         scn = next((x for x in sc.get("scenes") or [] if x["name"] == s.get("scene")), None)
         loc = pj.p("cast", f"location_{scn['name']}.png") if scn and len(sc.get("scenes") or []) > 1 else pj.p("cast", "location.png")
-        refs = [ref_of(c) for c in chars] + [pj.p("cast", f"{c}_sheet.png") for c in chars] + [loc]
-        refs = [r for r in dict.fromkeys(refs) if os.path.exists(r)]
+        sheet_scn = pj.p("cast", f"scene_{scn['name']}.png") if scn else ""
+        refs = ([pj.p("cast", f"{c}_sheet.png") for c in chars] + [sheet_scn, loc] + [pj.p("cast", f"prop_{x}.png") for x in s.get("props", []) or []]
+                + [ref_of(c) for c in chars])
+        refs = [r for r in dict.fromkeys(refs) if r and os.path.exists(r)][:5]   # 接口最多带 5 张：角色卡、场景设定、道具卡优先，真猫照片最后
         props = {x["name"]: x["look"] for x in sc.get("props", [])}
         sp = [p for p in s.get("props", []) or [] if p in props]
         prompt = (f"Film storyboard keyframe, vertical 9:16 frame, photorealistic still from a live-action short film. {s['image_prompt']} "

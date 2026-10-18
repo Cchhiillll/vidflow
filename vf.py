@@ -18,10 +18,13 @@
   vf voice <项目>                          录对白：确认过的声音逐句录、带表演指导、听写核对（先录对白再拍画面）
   vf clips <项目> [--takes 2] [--shots] [--recheck]   视频片段：720p 竖屏、每镜多条挑最好；说话镜头按台词时长张嘴；露底/姿势/物理检查
   vf reframe <项目> --shot s01 --take t2 --top 0 --height 0.65   某镜露了不该露的：取一部分画面放大（剪辑常规做法）
-  vf sync <项目>                           对口型：看画面里嘴动的时间放台词；对不上的镜头列出来重做
+  vf sync <项目>                           对口型：看画面里嘴动的时间放台词；对不上的镜头列出来（先 refit，不行再重做画面）
+  vf refit <项目> [--shots s01,s02] [--range 2.5-2.9]   按画面嘴动长度重录台词（每句最多 10 遍），不动画面；不写 --shots 就用对口型列出的
   vf mix <项目> [--music 文件]             合成：统一规格拼接、环境声交叉淡化、对白、配乐、字幕、水印
   vf review <项目> [--shots s01,s02]       交付前音画核对图（每 0.25 秒一帧，标出有声音的帧）
   vf qc <项目>                             ★ 成片检查（画幅/响度/每句台词听写/每镜角色比对）→ 过了把成片发给用户
+  vf copy <项目> [--only 本集] / --pick 账号=2,剧集=1,本集=3   发布文案：围绕立意写账号简介/剧集介绍/本集文案各 3 版（带编辑自查），导演挑定
+  vf deliver <项目> [--file 文件] [--note 附言] [--phone]   飞书私信交付：≤30MB 直接发，大的走云空间链接，不通就发手机版
   vf log <项目> [行数]                     看后台运行的日志
 """
 import json, os, shutil, subprocess, sys, time
@@ -131,9 +134,15 @@ def dispatch(cmd, pj, opt):
     if cmd in ("script", "cast", "boards"):
         import vf_pre
         return getattr(vf_pre, "cmd_" + cmd)(pj, opt)
-    if cmd in ("voices", "voice", "clips", "reframe", "sync", "mix", "qc", "review"):
+    if cmd in ("voices", "voice", "clips", "reframe", "sync", "refit", "mix", "qc", "review"):
         import vf_post
         return getattr(vf_post, "cmd_" + cmd)(pj, opt)
+    if cmd == "copy":
+        import vf_copy
+        return vf_copy.cmd_copy(pj, opt)
+    if cmd == "deliver":
+        import vf_deliver
+        return vf_deliver.cmd_deliver(pj, opt)
     raise SystemExit(f"没有这个命令：{cmd}\n" + __doc__)
 
 

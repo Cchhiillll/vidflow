@@ -610,7 +610,7 @@ def cmd_sync(pj, args):
     pj.require("clips")
     sc = pj.load("script/script.json")
     picks, lines = pj.load("clips/picks.json"), pj.load("audio/lines.json")
-    place, fails = {}, []
+    place, fails, refit = {}, [], []
     cpath = pj.p("audio", "mouth_cache.json")
     cache = json.load(open(cpath)) if os.path.exists(cpath) else {}
     for s in sc["shots"]:
@@ -628,8 +628,9 @@ def cmd_sync(pj, args):
         # 同一片段的结果存下来不重测；判对不上之前再测两次取最长的那次
         key = f"{os.path.basename(clip)}:{os.path.getmtime(clip):.0f}"
         m = re.search(r"line_dur=([0-9.]+)", picks[sid].get("why", ""))
-        if m and abs(float(m.group(1)) - ln["dur"]) > 0.3:     # 台词重录后时长变了，画面里的嘴还是按旧台词动的（10-18 s01/s13）
-            fails.append(f"{sid}：台词重录过（{float(m.group(1)):.1f}s→{ln[dur]:.1f}s），画面按旧台词生成，要重做这一镜（vf clips <项目> --shots {sid}）"); continue
+        if m and abs(float(m.group(1)) - ln["dur"]) > 0.3 and ln.get("fit_for") != key:     # 台词重录后时长变了，画面里的嘴还是按旧台词动的（10-18 s01/s13）
+            fails.append(f"{sid}：台词重录过（{float(m.group(1)):.1f}s→{ln['dur']:.1f}s），画面按旧台词生成——先试 vf refit <项目> --shots {sid}（按画面嘴动长度重录），不行再重做这一镜（vf clips <项目> --shots {sid}）")
+            refit.append(sid); continue
         segs = cache.get(key)
         if segs is None:
             segs = mouth_activity(pj, s, clip, ln["speaker"]) or []
@@ -651,13 +652,81 @@ def cmd_sync(pj, args):
         pdur = probe(placed)["dur"]
         pj.log(f"对口型 {sid}：嘴动 {a:.2f}~{b:.2f}s（{wlen:.1f}s），台词 {ln['dur']:.1f}s → 变速 {tempo:.2f}")
         if pdur > wlen + 0.6 or pdur < wlen - 0.8:     # 嘴比声音多动 0.8 秒以上就算对不上（10-18 用户指出「嘴在动却没声音」）
-            fails.append(f"{sid}：嘴动 {wlen:.1f}s，台词 {pdur:.1f}s，对不上——重做这一镜（vf clips <项目> --shots {sid}）")
+            fails.append(f"{sid}：嘴动 {wlen:.1f}s，台词 {pdur:.1f}s，对不上——先试 vf refit <项目> --shots {sid}（重录到 {wlen * 0.97:.1f}~{wlen * 1.08:.1f}s），不行再重做这一镜（vf clips <项目> --shots {sid}）")
+            refit.append(sid)
         place[sid] = {"file": os.path.basename(placed), "start": round(a, 3), "dur": round(pdur, 3), "text": ln["text"],
                       "mouth": [round(a, 2), round(b, 2)]}
     pj.save("audio/placement.json", place)
     json.dump(cache, open(cpath, "w"), ensure_ascii=False)
-    pj.set("sync", "passed" if not fails else "failed", {"fails": fails})
-    print("✅ 台词都放到了嘴在动的位置" if not fails else "❌ 口型对不上：\n- " + "\n- ".join(fails))
+    pj.set("sync", "passed" if not fails else "failed", {"fails": fails, "refit": refit})
+    print("✅ 台词都放到了嘴在动的位置" if not fails else "❌ 口型对不上：\n- " + "\n- ".join(fails)
+          + (f"\n建议先按画面长度重录这几句（不动画面，最便宜）：vf refit {pj.name} --shots {','.join(refit)}，然后重跑 vf sync" if refit else ""))
+
+
+def mouth_span(pj, s, clip, speaker):
+    """画面里这个角色第一次开口到最后一次闭口（秒），用对口型同一份存档。"""
+    cpath = pj.p("audio", "mouth_cache.json")
+    cache = json.load(open(cpath)) if os.path.exists(cpath) else {}
+    key = f"{os.path.basename(clip)}:{os.path.getmtime(clip):.0f}"
+    segs = cache.get(key)
+    if segs is None:
+        segs = mouth_activity(pj, s, clip, speaker) or []
+        cache[key] = segs; json.dump(cache, open(cpath, "w"), ensure_ascii=False)
+    return key, segs
+
+
+def cmd_refit(pj, args):
+    """按画面长度重录台词（10-18 第一集 s01/s02/s13/s21 的做法）：台词改过、或口型对不上时，先不动画面，
+    把这句重录到画面里嘴动的长度——每句最多 10 遍，挑读音合格、长度落在区间里的；10 遍都不在区间，挑最接近的，
+    仍差太多就提示重做画面。区间默认按嘴动长度的 0.97~1.08 倍（对口型最多放慢 5%、加快 12%），也可 --range 2.5-2.9 手动指定。
+    录完把对口型、合成、成片检查标成要重跑。"""
+    sc = pj.load("script/script.json"); set_asr_names(sc)
+    picks, lines = pj.load("clips/picks.json"), pj.load("audio/lines.json")
+    only = args.get("shots") or (pj.state().get("sync", {}).get("report") or {}).get("refit") or []
+    if not only:
+        raise SystemExit("要写重录哪几镜：vf refit <项目> --shots s01,s02（对口型没过时会列出建议的镜号）")
+    rng = args.get("range")
+    done, bad, changed = [], [], []
+    for sid in only:
+        s = next((x for x in sc["shots"] if x["id"] == sid), None); ln = lines.get(sid)
+        if not s or not s.get("dialogue") or not ln:
+            bad.append(f"{sid}：这一镜没有台词"); continue
+        d = s["dialogue"]; clip = pj.p("clips", picks[sid]["file"])
+        key, segs = mouth_span(pj, s, clip, d["speaker"])
+        if isinstance(rng, str):
+            lo, hi = [float(x) for x in rng.split("-")]
+        elif d.get("offscreen") or d.get("place_at") is not None or not segs:
+            bad.append(f"{sid}：{'画外音/手动起点' if segs else '画面里没测到嘴动'}，没有画面长度可对，要用 --range 指定"); continue
+        else:
+            wlen = segs[-1][1] - segs[0][0]; lo, hi = wlen * 0.97, wlen * 1.08
+        meta = pj.p("cast", f"voice_{d['speaker']}_meta.json")
+        ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
+        best = None
+        for k in range(10):
+            f = pj.p("audio", f"{sid}_fit{k}.wav")
+            ok, heard, sim, note = say_line(pj, sc, f"{sid}_fit{k}", d["speaker"], tts_text(d["text"]), line_lead(sc, s), f, ref_f0, tries=2, direction=d.get("direction", ""))
+            if not ok:
+                continue
+            dur = probe(f)["dur"]; gap = 0 if lo <= dur <= hi else min(abs(dur - lo), abs(dur - hi))
+            pj.log(f"重录 {sid} 第 {k + 1} 遍：{dur:.2f}s（要 {lo:.2f}~{hi:.2f}s）听写「{heard}」{'，长度合适' if gap == 0 else ''}")
+            if best is None or gap < best[0]:
+                best = (gap, f, dur, heard, sim)
+            if gap == 0:
+                break
+        if not best:
+            bad.append(f"{sid}：10 遍都没录出读音合格的"); continue
+        shutil.copy(best[1], pj.p("audio", f"{sid}_clean.wav"))
+        lines[sid].update(file=f"{sid}_clean.wav", dur=round(best[2], 3), asr=best[3], match=round(best[4], 2), fit_for=key, fit_range=[round(lo, 2), round(hi, 2)])
+        pj.save("audio/lines.json", lines); changed.append(sid)
+        (done if best[0] <= 0.3 else bad).append(f"{sid}：{best[2]:.2f}s（要 {lo:.2f}~{hi:.2f}s）" + ("" if best[0] <= 0.3 else "，重录也对不上，要重做画面（vf clips <项目> --shots " + sid + "）"))
+    for f in os.listdir(pj.p("audio")):
+        if "_fit" in f:
+            os.remove(pj.p("audio", f))
+    for st in ("sync", "mix", "qc"):           # 台词变了，后面的都要重跑
+        if changed and st in pj.state():
+            pj.set(st, "failed", {"fails": [f"重录了 {'、'.join(changed)} 的台词，要重跑"]})
+    print(("✅ 重录好了：\n- " + "\n- ".join(done) if done else "") + ("\n❌ 没解决：\n- " + "\n- ".join(bad) if bad else "")
+          + (f"\n下一步：vf bg {pj.name} auto（重跑对口型→合成→成片检查），交付前 vf review {pj.name} --shots {','.join(changed)} 逐帧核对" if changed else ""))
 
 
 # ---------- 合成 ----------

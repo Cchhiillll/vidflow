@@ -661,7 +661,7 @@ def cmd_sync(pj, args):
         pdur = probe(placed)["dur"]
         pj.log(f"对口型 {sid}：嘴动 {a:.2f}~{b:.2f}s（{wlen:.1f}s），台词 {ln['dur']:.1f}s → 变速 {tempo:.2f}")
         if pdur > wlen + 0.6 or pdur < wlen - 0.8:     # 嘴比声音多动 0.8 秒以上就算对不上（10-18 用户指出「嘴在动却没声音」）
-            fails.append(f"{sid}：嘴动 {wlen:.1f}s，台词 {pdur:.1f}s，对不上——先试 vf refit <项目> --shots {sid}（重录到 {wlen * 0.97:.1f}~{wlen * 1.08:.1f}s），不行再重做这一镜（vf clips <项目> --shots {sid}）")
+            fails.append(f"{sid}：嘴动 {wlen:.1f}s，台词 {pdur:.1f}s，对不上——先试 vf refit <项目> --shots {sid}（重录到 {fit_range(wlen)[0]:.1f}~{fit_range(wlen)[1]:.1f}s），不行再重做这一镜（vf clips <项目> --shots {sid}）")
             refit.append(sid)
         place[sid] = {"file": os.path.basename(placed), "start": round(a, 3), "dur": round(pdur, 3), "text": ln["text"],
                       "mouth": [round(a, 2), round(b, 2)]}
@@ -670,6 +670,12 @@ def cmd_sync(pj, args):
     pj.set("sync", "passed" if not fails else "failed", {"fails": fails, "refit": refit})
     print("✅ 台词都放到了嘴在动的位置" if not fails else "❌ 口型对不上：\n- " + "\n- ".join(fails)
           + (f"\n建议先按画面长度重录这几句（不动画面，最便宜）：vf refit {pj.name} --shots {','.join(refit)}，然后重跑 vf sync" if refit else ""))
+
+
+def fit_range(wlen):
+    """台词该录多长才对得上画面里 wlen 秒的嘴动：对口型会把声音放慢最多 5%、加快最多 12%；
+    嘴比声音多动 0.4 秒以内看不出来（10-18 第一集 s13：嘴动 3.6 秒，录 3.3 秒成片合格）。"""
+    return 0.95 * max(0.3, wlen - 0.4), 1.08 * wlen
 
 
 def mouth_span(pj, s, clip, speaker):
@@ -687,7 +693,7 @@ def mouth_span(pj, s, clip, speaker):
 def cmd_refit(pj, args):
     """按画面长度重录台词（10-18 第一集 s01/s02/s13/s21 的做法）：台词改过、或口型对不上时，先不动画面，
     把这句重录到画面里嘴动的长度——每句最多 10 遍，挑读音合格、长度落在区间里的；10 遍都不在区间，挑最接近的，
-    仍差太多就提示重做画面。区间默认按嘴动长度的 0.97~1.08 倍（对口型最多放慢 5%、加快 12%），也可 --range 2.5-2.9 手动指定。
+    仍差太多就提示重做画面。区间默认见 fit_range（按嘴动长度，对口型能补的范围），也可 --range 2.5-2.9 手动指定。
     录完把对口型、合成、成片检查标成要重跑。"""
     sc = pj.load("script/script.json"); set_asr_names(sc)
     picks, lines = pj.load("clips/picks.json"), pj.load("audio/lines.json")
@@ -707,7 +713,7 @@ def cmd_refit(pj, args):
         elif d.get("offscreen") or d.get("place_at") is not None or not segs:
             bad.append(f"{sid}：{'画外音/手动起点' if segs else '画面里没测到嘴动'}，没有画面长度可对，要用 --range 指定"); continue
         else:
-            wlen = segs[-1][1] - segs[0][0]; lo, hi = wlen * 0.97, wlen * 1.08
+            lo, hi = fit_range(segs[-1][1] - segs[0][0])
         meta = pj.p("cast", f"voice_{d['speaker']}_meta.json")
         ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
         best = None

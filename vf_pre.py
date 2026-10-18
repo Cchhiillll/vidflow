@@ -164,6 +164,10 @@ def cmd_script(pj, args):
     for c in sc.get("characters", []):     # 已有定稿外观（系列片共用设定）就用它（10-18 第2集：模型把白猫锦山和虎斑桐生写反了）
         if c.get("name") in anchors:
             c["look"] = anchors[c["name"]]
+    vs = pj.load("cast/voice_style.json") if os.path.exists(pj.p("cast/voice_style.json")) else {}
+    for c in sc.get("characters", []):     # 已定稿的说话方式（系列片共用设定）：声音描述和语气说明照搬，不让模型重写（10-18 第2集音色跑偏）
+        if c.get("name") in vs:
+            c.update(vs[c["name"]])
     errs, warns = check_script(sc, brief)
     errs += lines_changed(sc)
     if not errs:

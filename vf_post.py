@@ -448,11 +448,13 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""
 
 def line_lead(sc, s):
     """这句台词的「前文」：分镜表 dialogue.lead 优先（同一角色、同一情绪、在这句之前会说的话，只用来带出语气，不进成片）；
-    没写就用同一场戏里前面两句台词。"""
+    没写就用同一场戏里这个角色前面两句台词。"""
     dl = s.get("dialogue") or {}
     if dl.get("lead"):
         return dl["lead"]
-    prev = [x["dialogue"]["text"] for x in sc["shots"][:sc["shots"].index(s)] if x.get("dialogue") and x.get("scene") == s.get("scene")]
+    # 只用同一个角色自己说过的话（10-18 第2集：拿别的角色的台词当前文，语气和声音都带偏了）
+    prev = [x["dialogue"]["text"] for x in sc["shots"][:sc["shots"].index(s)]
+            if x.get("dialogue") and x.get("scene") == s.get("scene") and x["dialogue"].get("speaker") == dl.get("speaker")]
     return "".join(prev[-2:])
 
 

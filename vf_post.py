@@ -387,42 +387,50 @@ MOUTH = ('图中「{c}」的嘴巴和下巴在哪里？给出归一化坐标（0
 
 
 def mouth_activity(pj, s, clip, c):
-    """看画面判断嘴什么时候在动：嘴部区域逐帧差分（扣掉整张脸的晃动），返回 [(起, 止)]。"""
+    """看画面判断嘴什么时候在动：嘴部区域逐帧差分（扣掉整张脸的晃动），返回 [(起, 止)]。
+    镜头会推拉、角色会走动，嘴的位置会变（10-18 s21 教训：只在 40% 处定一次位置，推镜开头那句完全没测到），
+    所以把片段分前/中/后三段，每段在自己中间那一帧重新找嘴，只采信这一段时间里的结果。"""
     import numpy as np
-    from PIL import Image
     d = probe(clip)["dur"]
-    f = frame_at(clip, d * 0.4, clip + ".mouth.jpg")
-    try:
-        b = vision(MOUTH.format(c=c), [f])
-        x0, y0, x1, y1 = [float(b[k]) for k in ("x0", "y0", "x1", "y1")]
-    except Exception:
-        return None
     pr = probe(clip); W0, H0 = pr["w"], pr["h"]
-    cw, ch = max(16, int((x1 - x0) * W0)), max(16, int((y1 - y0) * H0)); cx, cy = int(x0 * W0), int(y0 * H0)
-    fy0 = max(0, cy - 2 * ch)                       # 嘴上方同宽的一块（眼鼻）当「整体晃动」参照
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", clip, "-vf", f"fps={FPS},crop={cw}:{ch * 3}:{cx}:{fy0},scale=48:72,format=gray",
-                          "-f", "rawvideo", "-"], capture_output=True).stdout
-    fr = np.frombuffer(raw, np.uint8).reshape(-1, 72, 48).astype(np.float32)
-    if len(fr) < 4:
+    found = []
+    for k, frac in enumerate((1 / 6, 1 / 2, 5 / 6)):
+        f = frame_at(clip, d * frac, clip + f".mouth{k}.jpg")
+        try:
+            b = vision(MOUTH.format(c=c), [f])
+            x0, y0, x1, y1 = [float(b[q]) for q in ("x0", "y0", "x1", "y1")]
+        except Exception:
+            continue
+        cw, ch = max(16, int((x1 - x0) * W0)), max(16, int((y1 - y0) * H0)); cx, cy = int(x0 * W0), int(y0 * H0)
+        fy0 = max(0, cy - 2 * ch)                   # 嘴上方同宽的一块（眼鼻）当「整体晃动」参照
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", clip, "-vf", f"fps={FPS},crop={cw}:{ch * 3}:{cx}:{fy0},scale=48:72,format=gray",
+                              "-f", "rawvideo", "-"], capture_output=True).stdout
+        fr = np.frombuffer(raw, np.uint8).reshape(-1, 72, 48).astype(np.float32)
+        if len(fr) < 4:
+            continue
+        m0 = int(72 * (cy - fy0) / (ch * 3))
+        dm = np.abs(np.diff(fr[:, m0:, :], axis=0)).mean(axis=(1, 2))
+        du = np.abs(np.diff(fr[:, :max(1, m0), :], axis=0)).mean(axis=(1, 2))
+        act = np.clip(dm - 0.8 * du, 0, None)
+        act = np.convolve(act, np.ones(5) / 5, mode="same")
+        thr = np.median(act) + 0.6 * (np.percentile(act, 90) - np.median(act))
+        on = act > max(thr, 0.3)
+        lo, hi = d * (frac - 1 / 6), d * (frac + 1 / 6)
+        st = None
+        for i, v in enumerate(on):
+            if v and st is None:
+                st = i
+            if (not v or i == len(on) - 1) and st is not None:
+                a, b2 = max(st / FPS, lo), min((i + 1) / FPS, hi)
+                if b2 > a:
+                    found.append([a, b2])
+                st = None
+    if not found:
         return None
-    rel = (cy - fy0) / (ch * 3)
-    m0 = int(72 * rel)
-    dm = np.abs(np.diff(fr[:, m0:, :], axis=0)).mean(axis=(1, 2))
-    du = np.abs(np.diff(fr[:, :max(1, m0), :], axis=0)).mean(axis=(1, 2))
-    act = np.clip(dm - 0.8 * du, 0, None)
-    k = 5; act = np.convolve(act, np.ones(k) / k, mode="same")
-    thr = np.median(act) + 0.6 * (np.percentile(act, 90) - np.median(act))
-    on = act > max(thr, 0.3)
-    segs, st = [], None
-    for i, v in enumerate(on):
-        if v and st is None:
-            st = i
-        if (not v or i == len(on) - 1) and st is not None:
-            segs.append([st / FPS, (i + 1) / FPS]); st = None
-    merged = []
-    for a, b2 in segs:
+    found.sort(); merged = []
+    for a, b2 in found:
         if merged and a - merged[-1][1] < 0.35:
-            merged[-1][1] = b2
+            merged[-1][1] = max(merged[-1][1], b2)
         else:
             merged.append([a, b2])
     return [m for m in merged if m[1] - m[0] >= 0.3]

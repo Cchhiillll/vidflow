@@ -1,0 +1,9 @@
+{
+  "title": "片名",
+  "requirement": "用户原话需求",
+  "story_core": "故事内核",
+  "duration": 60,
+  "refs": {"角色名": ["./refs/character.jpg"]},
+  "voices": {"角色名": "preset:苏打"},
+  "watermark": ""
+}

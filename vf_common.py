@@ -3,11 +3,11 @@ import base64, datetime as dt, io, json, os, re, subprocess, time, urllib.error,
 
 HOME = os.path.expanduser("~")
 PROD = os.environ.get("VIDFLOW_PROD", f"{HOME}/production")
-CPA = "https://cpa.modelverseapi.com/v1"
-PROXY = os.environ.get("VIDFLOW_PROXY", "http://127.0.0.1:10819")
+CPA = os.environ.get("VIDFLOW_TEXT_BASE", "https://cpa.modelverseapi.com/v1")
+PROXY = os.environ.get("VIDFLOW_PROXY", "")
 TEXT_MODEL = os.environ.get("VIDFLOW_TEXT_MODEL", "gemini-3.8-flash-high")
 IMAGE_MODEL = os.environ.get("VIDFLOW_IMAGE_MODEL", "gpt-image-2.5")   # gpt 出图额度冷却时可临时换 grok-imagine-image-2.0（10-18 实测走 /images/edits 能照参考图画）
-VIDEO_MODEL = "grok-imagine-video-1.5"
+VIDEO_MODEL = os.environ.get("VIDFLOW_VIDEO_MODEL", "grok-imagine-video-1.5")
 # 出图上游顺序写在 ~/.config/vidflow/image_providers.json（CPA → zzone → modelverse，额度用完自动换下一个）；
 # 临时只用某一个：VIDFLOW_IMAGE_BASE=... VIDFLOW_IMAGE_MODEL=...（密钥放 ~/.config/vidflow/image_api.key）。
 IMAGE_BASE = os.environ.get("VIDFLOW_IMAGE_BASE", CPA)
@@ -15,14 +15,26 @@ W, H = 720, 1280            # 成片规格：9:16 竖屏
 STAGES = ["intent", "story", "screenplay", "script", "cast", "voices", "boards", "voice", "clips", "sync", "mix", "qc"]
 
 
-def key():
-    for l in open(f"{HOME}/.hermes/.env", encoding="utf-8"):
-        if l.startswith("MODELVERSEAPI_API_KEY="):
+def _read_env_file(path, name):
+    if not os.path.exists(path):
+        return None
+    for l in open(path, encoding="utf-8"):
+        if l.startswith(name + "="):
             return l.split("=", 1)[1].strip().strip("\"'")
-    raise SystemExit("缺少 CPA 密钥")
+    return None
 
 
-_OP = urllib.request.build_opener(urllib.request.ProxyHandler({"https": PROXY, "http": PROXY}))
+def key():
+    k = os.environ.get("VIDFLOW_API_KEY") or os.environ.get("MODELVERSEAPI_API_KEY")
+    if k:
+        return k.strip()
+    k = _read_env_file(f"{HOME}/.hermes/.env", "MODELVERSEAPI_API_KEY") or _read_env_file(f"{HOME}/.config/vidflow/.env", "VIDFLOW_API_KEY")
+    if k:
+        return k
+    raise SystemExit("缺少 API 密钥：设 VIDFLOW_API_KEY 或 MODELVERSEAPI_API_KEY")
+
+
+_OP = urllib.request.build_opener(urllib.request.ProxyHandler({"https": PROXY, "http": PROXY} if PROXY else {}))
 
 
 def http(method, url, body=None, timeout=300, raw=False):

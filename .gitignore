@@ -1,2 +1,5 @@
 __pycache__/
 _bak/
+.env
+*.key
+.venv/

@@ -95,7 +95,11 @@ def cmd_deliver(pj, args):
     if not os.path.exists(path):
         raise SystemExit(f"没有这个文件：{path}")
     note = args.get("note") if isinstance(args.get("note"), str) else f"《{pj.load('brief.json').get('title') or pj.name}》"
-    fs = Feishu()
+    try:
+        fs = Feishu()
+    except Exception as e:
+        print(f"没配飞书（{e}）。成片在：{path}")
+        return
     copy = pj.p("final", "文案.txt")
     fs.text(note + (("\n\n" + open(copy, encoding="utf-8").read().strip()) if os.path.exists(copy) and not args.get("file") else ""))
     size = os.path.getsize(path)

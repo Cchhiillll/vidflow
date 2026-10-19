@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# 仓库入口。本机 Hermes 仍用 ~/.local/bin/vf（带代理和专用 Python）。
+set -euo pipefail
+DIR=$(cd "$(dirname "$0")" && pwd)
+if [ -x "$DIR/.venv/bin/python" ]; then
+  PY="$DIR/.venv/bin/python"
+else
+  PY=${VIDFLOW_PYTHON:-python3}
+fi
+exec "$PY" "$DIR/vf.py" "$@"

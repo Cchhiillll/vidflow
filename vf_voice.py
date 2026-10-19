@@ -10,9 +10,14 @@ _OP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _key():
-    for l in open(f"{HOME}/.hermes/.env", encoding="utf-8"):
-        if l.startswith("MIMO_API_KEY="):
-            return l.split("=", 1)[1].strip().strip("\"'")
+    k = os.environ.get("MIMO_API_KEY")
+    if k:
+        return k.strip()
+    envf = f"{HOME}/.hermes/.env"
+    if os.path.exists(envf):
+        for l in open(envf, encoding="utf-8"):
+            if l.startswith("MIMO_API_KEY="):
+                return l.split("=", 1)[1].strip().strip("\"'")
     raise SystemExit("缺少 MIMO_API_KEY")
 
 

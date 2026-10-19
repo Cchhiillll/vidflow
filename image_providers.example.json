@@ -1,0 +1,4 @@
+[
+  {"name": "primary", "base": "https://api.example.com/v1", "model": "gpt-image-2.5", "keyfile": null},
+  {"name": "fallback", "base": "https://api.example.com/v1", "model": "gpt-image-2", "keyfile": "~/.config/vidflow/image_api.key"}
+]

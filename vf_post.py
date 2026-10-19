@@ -791,6 +791,20 @@ def ass_time(t):
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
+def caption_wrap(t, n=12):
+    """画面字幕：原文里的换行转成字幕换行（10-19：直接写换行符把整条字幕弄坏，前情字幕挤成一行小字），每行超过 n 字在标点处再折。"""
+    out = []
+    for para in t.replace("\\N", "\n").split("\n"):
+        para = para.strip()
+        while len(para) > n:
+            cuts = [i + 1 for i, ch in enumerate(para[:n + 2]) if ch in "，。？！、；…" and i + 1 < len(para)]
+            k = max(cuts) if cuts else n
+            out.append(para[:k]); para = para[k:]
+        if para:
+            out.append(para)
+    return "\\N".join(out)
+
+
 def sub_wrap(t, n=13):
     """字幕超过 n 个字就在最靠中间的标点处折成两行（10-18：长台词一行排不下，两头被截掉）。"""
     if len(t) <= n:
@@ -901,7 +915,7 @@ def cmd_mix(pj, args):
     ev = "".join(f"Dialogue: 0,{ass_time(offs[sid] + ln['start'])},{ass_time(offs[sid] + ln['start'] + ln['dur'] + 0.15)},D,{sub_wrap(ln['text'])}\n"
                  for sid, ln in lines.items())
     # 画面字幕（时间地点、「十年后」）：放在画面上部，整镜显示，淡入淡出
-    ev += "".join(f"Dialogue: 1,{ass_time(offs[s['id']] + 0.2)},{ass_time(offs[s['id']] + min(float(s['duration']) - 0.2, 3.5))},C,{{\\fad(300,300)}}{s['caption']}\n"
+    ev += "".join(f"Dialogue: 1,{ass_time(offs[s['id']] + 0.2)},{ass_time(offs[s['id']] + float(s['duration']) - 0.2)},C,{{\\fad(300,300)}}{caption_wrap(s['caption'])}\n"
                   for s in shots if s.get("caption"))
     open(ass, "w", encoding="utf-8").write(head + ev)
     vf = f"subtitles={ass}"

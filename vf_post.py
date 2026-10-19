@@ -628,8 +628,8 @@ def split_place(pj, sid, src, starts):
         a, b = bounds[k], bounds[k + 1]
         piece = pj.p("audio", f"{sid}_seg{k}.wav")
         sh("ffmpeg", "-v", "error", "-y", "-i", src, "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-af",
-           "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse",
-           "-ar", "48000", "-ac", "1", piece, check=True)
+           "silenceremove=start_periods=1:start_threshold=-38dB,areverse,silenceremove=start_periods=1:start_threshold=-38dB,areverse,afade=t=in:d=0.01",
+           "-ar", "48000", "-ac", "1", piece, check=True)      # 切口处的停顿按找停顿的同一阈值（-38dB）去掉，否则留着一截底噪
         rel = max(starts[k] - starts[0], t_end + 0.12 if k else 0.0)
         parts.append((piece, rel)); t_end = rel + probe(piece)["dur"]
     out = pj.p("audio", f"{sid}_segplaced.wav")

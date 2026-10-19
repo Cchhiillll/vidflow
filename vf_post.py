@@ -899,8 +899,7 @@ def cmd_mix(pj, args):
         scn = next((x for x in sc.get("scenes") or [] if x["name"] == s.get("scene")), {})
         t_ = scn.get("ambience") or ("rain" if re.search(r"rain|雨", scn.get("look", ""), re.I) else "street" if re.search(r"street|街", scn.get("look", ""), re.I) else "room")
         return t_
-    BED = {"rain": "anoisesrc=color=pink:amplitude=0.22:sample_rate=48000,highpass=f=350,lowpass=f=9000,volume=0.9[a];"
-                   "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=180,volume=0.35[b];[a][b]amix=inputs=2:normalize=0",
+    BED = {"rain": "anoisesrc=color=pink:amplitude=0.22:sample_rate=48000,highpass=f=400,lowpass=f=9000,volume=0.8",   # 10-19：去掉 180Hz 以下的棕噪（听着是嗡嗡声）
            "street": "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=260,volume=0.4",
            "room": "anoisesrc=color=pink:amplitude=0.12:sample_rate=48000,highpass=f=180,lowpass=f=2500,volume=0.35",   # 10-19：原来是 320Hz 以下的低频棕噪，听着一直嗡嗡响；改成很轻的中频室内空气声
            "none": "anullsrc=r=48000:cl=mono"}
@@ -938,6 +937,11 @@ def cmd_mix(pj, args):
                    f"aevalsrc='0.5*sin(2*PI*900*t-250/0.45*cos(2*PI*0.45*t))':s=48000:d={dur:.3f}", "-af",
                    f"lowpass=f=2500,aecho=0.8:0.6:120:0.35,volume='{10 ** (g / 20):.4f}+({10 ** (g2 / 20):.4f}-{10 ** (g / 20):.4f})*t/{dur:.3f}':eval=frame,"
                    f"afade=t=in:d=1.0,afade=t=out:st={max(0, dur - 1.0):.2f}:d=1.0", "-ac", "2", src, check=True)
+            elif fx["type"] == "ring":                 # 老式座机铃声：两个高音交替、响 0.4 秒停 0.2 秒
+                d_ = float(fx.get("dur", 2.0))
+                sh("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                   f"aevalsrc='0.35*(sin(2*PI*1300*t)+sin(2*PI*1650*t))*lt(mod(t\\,0.6)\\,0.4)*(0.6+0.4*sin(2*PI*20*t))':s=48000:d={d_:.2f}",
+                   "-af", f"volume={10 ** (g / 20):.3f}", "-ac", "2", src, check=True)
             elif fx["type"] in ("punch", "thud"):       # 合成打击声（10-19 第2集出拳、倒地没有声音）：punch=短促闷响，thud=身体落地的低频闷响
                 g_ = 10 ** (g / 20)
                 expr = ("(0.9*sin(2*PI*90*t)*exp(-28*t)+0.6*(random(0)-0.5)*exp(-45*t))" if fx["type"] == "punch"

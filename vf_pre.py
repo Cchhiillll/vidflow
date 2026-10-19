@@ -412,7 +412,8 @@ def cmd_boards(pj, args):
         scn = next((x for x in sc.get("scenes") or [] if x["name"] == s.get("scene")), None)
         loc = pj.p("cast", f"location_{scn['name']}.png") if scn and len(sc.get("scenes") or []) > 1 else pj.p("cast", "location.png")
         sheet_scn = pj.p("cast", f"scene_{scn['name']}.png") if scn else ""
-        refs = ([pj.p("cast", f"{c}_sheet.png") for c in chars] + [sheet_scn, loc] + [pj.p("cast", f"prop_{x}.png") for x in s.get("props", []) or []]
+        same = [pj.p("boards", f"{x}.png") for x in s.get("ref_frames", [])]   # 同一场里已定下的首帧一起当参考，保证同一张脸（10-19 第2集人物一致性）
+        refs = (same[:1] + [pj.p("cast", f"{c}_sheet.png") for c in chars] + [sheet_scn, loc] + [pj.p("cast", f"prop_{x}.png") for x in s.get("props", []) or []]
                 + [ref_of(c) for c in chars])
         refs = [r for r in dict.fromkeys(refs) if r and os.path.exists(r)][:5]   # 接口最多带 5 张：角色卡、场景设定、道具卡优先，真猫照片最后
         props = {x["name"]: x["look"] for x in sc.get("props", [])}

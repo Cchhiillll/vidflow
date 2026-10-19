@@ -409,21 +409,22 @@ def _rate_ok(dur, text, direction=""):
     return dur <= (0.6 if slow else 0.36) * n + 0.4      # +0.4 秒：短句前后的起音收尾和句中停顿（「有种，你就开枪」6 个字要 2.5 秒左右）
 
 
-def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""):
+def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction="", tag=""):
     """录一句片中台词（10-18 定稿做法，用户认可的质量）：
     短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
     再按逐字时间把这一句剪出来；每次都听写核对（读音一致、不多字）、查音高没漂，最多录 tries 次挑最好的。
     返回 (成功, 听写, 相似度, 说明)。"""
     n = len(norm_zh(text)); best = None
     lead = (lead or "").strip()
-    style = voice_style(sc, c)
+    style = voice_style(sc, c) + (f"。这一句：{direction}" if direction else "")   # 10-19：只给人物描述、不给这句的情绪，念出来像机器人
+    pre = f"({tag})" if tag else ""      # MiMo 官方逐句风格标签：写在要念的文字开头，不会被念出来
     plan = [lead] * tries + ([""] * 3 if lead else [])     # 带前文的都不合格，再试 3 次不带前文直接念（10-18 s01：模型把前文和台词连着念，没有下刀点）
     for k, lead in enumerate(plan):
         if k >= tries and best and best[0] >= 0.95:
             break
         full, cut = pj.p("audio", f"{sid}_full{k}.wav"), pj.p("audio", f"{sid}_take{k}.wav")
         try:
-            say(pj, c, style, (lead + text) if lead else text, full)
+            say(pj, c, style, pre + ((lead + text) if lead else text), full)
         except Exception as e:
             pj.log(f"对白 {sid} 第 {k + 1} 次合成失败：{str(e)[:80]}"); continue
         start = 0.0
@@ -545,7 +546,7 @@ def cmd_voice(pj, args):
         clean = pj.p("audio", f"{sid}_clean.wav")
         meta = pj.p("cast", f"voice_{c}_meta.json")
         ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
-        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0, direction=dl.get("direction", ""))
+        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0, direction=dl.get("direction", ""), tag=dl.get("tag", ""))
         if not ok_tts:
             fails.append(f"{sid} 录了 5 次都不合格（最后听写「{heard}」）"); continue
         lines[sid] = {"file": os.path.basename(clean), "dur": round(probe(clean)["dur"], 3), "speaker": c, "text": dl["text"],
@@ -750,7 +751,7 @@ def cmd_refit(pj, args):
         best = None
         for k in range(10):
             f = pj.p("audio", f"{sid}_fit{k}.wav")
-            ok, heard, sim, note = say_line(pj, sc, f"{sid}_fit{k}", d["speaker"], tts_text(d["text"]), line_lead(sc, s), f, ref_f0, tries=2, direction=d.get("direction", ""))
+            ok, heard, sim, note = say_line(pj, sc, f"{sid}_fit{k}", d["speaker"], tts_text(d["text"]), line_lead(sc, s), f, ref_f0, tries=2, direction=d.get("direction", ""), tag=d.get("tag", ""))
             if not ok:
                 continue
             dur = probe(f)["dur"]; gap = 0 if lo <= dur <= hi else min(abs(dur - lo), abs(dur - hi))

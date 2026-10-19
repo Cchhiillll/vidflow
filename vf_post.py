@@ -338,6 +338,35 @@ def voice_style(sc, c):
     return f"用{c}（{ch.get('voice_desc') or '自然'}）的语调说话，普通话标准，咬字清晰纯正"
 
 
+def _spec_shape(path):
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"], capture_output=True).stdout
+    x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
+    fr, S = 512, []
+    for k in range(0, len(x) - fr, 256):
+        w = x[k:k + fr] * np.hanning(fr)
+        if np.sqrt((w ** 2).mean()) < 0.01:
+            continue
+        S.append(np.log(np.abs(np.fft.rfft(w))[:200] + 1e-6))
+    if not S:
+        return None
+    v = np.mean(S, 0); return v - v.mean()
+
+
+_REF_SHAPE = {}
+
+
+def timbre_sim(ref, path):
+    """和原声参考音的音色相似度（平均频谱形状的余弦，0~1）。第1集桐生成片约 0.95。"""
+    import numpy as np
+    if ref not in _REF_SHAPE:
+        _REF_SHAPE[ref] = _spec_shape(ref)
+    a, b = _REF_SHAPE[ref], _spec_shape(path)
+    if a is None or b is None:
+        return 0.0
+    return float(a @ b / np.linalg.norm(a) / np.linalg.norm(b))
+
+
 def expressiveness(path):
     """语气起伏：音高（半音）标准差 + 响度（dB）标准差的一半。念得像机器人时这个数小（10-19 第2集平均 3.7，第1集 4.2，标杆 5.4）。"""
     import numpy as np
@@ -438,8 +467,11 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""
     返回 (成功, 听写, 相似度, 说明)。"""
     n = len(norm_zh(text)); best = None; goods = []
     lead = (lead or "").strip()
-    style = voice_style(sc, c) + (f"。这一句：{direction}" if direction else "")   # 10-19：只给人物描述、不给这句的情绪，念出来像机器人
-    pre = f"({tag})" if tag else ""      # MiMo 官方逐句风格标签：写在要念的文字开头，不会被念出来
+    # 10-19 教训：给克隆加逐句情绪说明和风格标签，声音明显不像原声了（用户：比上一版还差）。
+    # 用户认可的第1集做法：user 里只放人物描述一句，不拼表演指导、不加标签；情绪全靠前面垫的同情绪短句带出来。
+    style = voice_style(sc, c)
+    pre = ""
+    refv = pj.p("cast", f"voice_{c}.mp3")
     plan = [lead] * tries + ([""] * 3 if lead else [])     # 带前文的都不合格，再试 3 次不带前文直接念（10-18 s01：模型把前文和台词连着念，没有下刀点）
     for k, lead in enumerate(plan):
         if k >= tries and best and best[0] >= 0.95:
@@ -466,10 +498,10 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""
         score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0) - (0.3 if not rate_ok else 0)
         pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}{'' if rate_ok else '，太慢'}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
         good = sim >= 0.95 and not extra and not drift and ends_ok and rate_ok
-        ex = expressiveness(cut) if good else 0.0
+        tim = timbre_sim(refv, cut) if good and os.path.exists(refv) else 0.0
         if good:
-            goods.append(ex)
-        score += 0.08 * ex                       # 合格的几版里挑语气起伏最大的（10-19：只挑第一版合格的，念得平）
+            goods.append(tim)
+        score += 2.0 * tim                       # 合格的几版里挑最像原声的（10-19：录得不像原声比没语气更糟）
         if best is None or score > best[0]:
             best = (score, cut, heard, sim, f0)
         if len(goods) >= want_good:

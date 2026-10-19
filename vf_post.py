@@ -618,18 +618,17 @@ def mouth_activity(pj, s, clip, c):
 
 def split_place(pj, sid, src, starts):
     """把一句台词在最长的 len(starts)-1 处停顿切开，第 k 截从 starts[k] 秒开始（相对第一截），中间补静音；后一截不早于前一截结束。"""
-    sil = sorted(_silences(src, db=-38, d=0.12), key=lambda x: x[1] - x[0], reverse=True)[:len(starts) - 1]
-    cuts = sorted((a + b) / 2 for a, b in sil)
-    if len(cuts) < len(starts) - 1:
+    sil = sorted(sorted(_silences(src, db=-38, d=0.12), key=lambda x: x[1] - x[0], reverse=True)[:len(starts) - 1])
+    if len(sil) < len(starts) - 1:
         raise RuntimeError(f"{sid} 台词里找不到 {len(starts) - 1} 处停顿，没法分截")
-    total = probe(src)["dur"]; bounds = [0.0] + cuts + [total]
+    total = probe(src)["dur"]
+    edges = [0.0] + [v for a, b in sil for v in (a + 0.03, b - 0.03)] + [total]     # 每截 = 两处停顿之间的说话部分，停顿本身去掉
     parts, t_end = [], 0.0
     for k in range(len(starts)):
-        a, b = bounds[k], bounds[k + 1]
+        a, b = edges[2 * k], edges[2 * k + 1]
         piece = pj.p("audio", f"{sid}_seg{k}.wav")
-        sh("ffmpeg", "-v", "error", "-y", "-i", src, "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-af",
-           "silenceremove=start_periods=1:start_threshold=-38dB,areverse,silenceremove=start_periods=1:start_threshold=-38dB,areverse,afade=t=in:d=0.01",
-           "-ar", "48000", "-ac", "1", piece, check=True)      # 切口处的停顿按找停顿的同一阈值（-38dB）去掉，否则留着一截底噪
+        sh("ffmpeg", "-v", "error", "-y", "-i", src, "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-af", "afade=t=in:d=0.01,areverse,afade=t=in:d=0.02,areverse",
+           "-ar", "48000", "-ac", "1", piece, check=True)
         rel = max(starts[k] - starts[0], t_end + 0.12 if k else 0.0)
         parts.append((piece, rel)); t_end = rel + probe(piece)["dur"]
     out = pj.p("audio", f"{sid}_segplaced.wav")

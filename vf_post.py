@@ -616,6 +616,31 @@ def mouth_activity(pj, s, clip, c):
     return [m for m in merged if m[1] - m[0] >= 0.3]
 
 
+def split_place(pj, sid, src, starts):
+    """把一句台词在最长的 len(starts)-1 处停顿切开，第 k 截从 starts[k] 秒开始（相对第一截），中间补静音；后一截不早于前一截结束。"""
+    sil = sorted(_silences(src, db=-38, d=0.12), key=lambda x: x[1] - x[0], reverse=True)[:len(starts) - 1]
+    cuts = sorted((a + b) / 2 for a, b in sil)
+    if len(cuts) < len(starts) - 1:
+        raise RuntimeError(f"{sid} 台词里找不到 {len(starts) - 1} 处停顿，没法分截")
+    total = probe(src)["dur"]; bounds = [0.0] + cuts + [total]
+    parts, t_end = [], 0.0
+    for k in range(len(starts)):
+        a, b = bounds[k], bounds[k + 1]
+        piece = pj.p("audio", f"{sid}_seg{k}.wav")
+        sh("ffmpeg", "-v", "error", "-y", "-i", src, "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-af",
+           "silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse",
+           "-ar", "48000", "-ac", "1", piece, check=True)
+        rel = max(starts[k] - starts[0], t_end + 0.12 if k else 0.0)
+        parts.append((piece, rel)); t_end = rel + probe(piece)["dur"]
+    out = pj.p("audio", f"{sid}_segplaced.wav")
+    ins, fl = [], []
+    for k, (piece, rel) in enumerate(parts):
+        ins += ["-i", piece]; ms = int(rel * 1000); fl.append(f"[{k}:a]adelay={ms}|{ms}[p{k}]")
+    sh("ffmpeg", "-v", "error", "-y", *ins, "-filter_complex", ";".join(fl) + ";" + "".join(f"[p{k}]" for k in range(len(parts)))
+       + f"amix=inputs={len(parts)}:normalize=0", "-ar", "48000", "-ac", "1", out, check=True)
+    return out
+
+
 def cmd_sync(pj, args):
     """把录好的台词放到画面里嘴在动的那段；对不上的镜头列出来重做。画外音按镜头开头放。"""
     pj.require("clips")
@@ -631,6 +656,11 @@ def cmd_sync(pj, args):
         clip = pj.p("clips", picks[sid]["file"]); src = pj.p("audio", ln["file"])
         if ln.get("offscreen"):
             place[sid] = {"file": ln["file"], "start": 0.5, "dur": ln["dur"], "text": ln["text"]}; continue
+        segs_at = (s.get("dialogue") or {}).get("segments_at")   # 角色一句话分几截说（嘴动、停、再动）：在台词最长的几处停顿切开，每截放到指定秒数（10-19 第2集）
+        if segs_at:
+            out = split_place(pj, sid, src, [float(x) for x in segs_at])
+            place[sid] = {"file": os.path.basename(out), "start": float(segs_at[0]), "dur": round(probe(out)["dur"], 3), "text": ln["text"], "manual": True}
+            pj.log(f"对口型 {sid}：分 {len(segs_at)} 截放在 {segs_at}"); continue
         at = (s.get("dialogue") or {}).get("place_at")     # 导演看过画面后手动指定台词从第几秒开始（比如说话人中途转过身去）
         if at is not None:
             place[sid] = {"file": ln["file"], "start": float(at), "dur": ln["dur"], "text": ln["text"], "manual": True}

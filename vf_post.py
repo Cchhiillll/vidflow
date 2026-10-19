@@ -338,6 +338,28 @@ def voice_style(sc, c):
     return f"用{c}（{ch.get('voice_desc') or '自然'}）的语调说话，普通话标准，咬字清晰纯正"
 
 
+def expressiveness(path):
+    """语气起伏：音高（半音）标准差 + 响度（dB）标准差的一半。念得像机器人时这个数小（10-19 第2集平均 3.7，第1集 4.2，标杆 5.4）。"""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"], capture_output=True).stdout
+    x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768
+    fr, hop, f0, en = 640, 160, [], []
+    for k in range(0, len(x) - fr, hop):
+        w = x[k:k + fr] - x[k:k + fr].mean(); r = float(np.sqrt((w ** 2).mean()))
+        if r < 0.015:
+            continue
+        en.append(20 * np.log10(r + 1e-9))
+        ac = np.correlate(w, w, "full")[fr - 1:]
+        lo, hi = 16000 // 450, 16000 // 65
+        lag = lo + int(np.argmax(ac[lo:hi]))
+        if ac[lag] > 0.35 * ac[0]:
+            f0.append(16000 / lag)
+    if len(f0) < 8:
+        return 0.0
+    f0 = np.array(f0); st = 12 * np.log2(f0 / np.median(f0)); st = st[np.abs(st) < 12]
+    return float(np.std(st) + 0.5 * np.std(en))
+
+
 def f0_median(path):
     """粗测说话音高中位数（Hz），用来查声音有没有漂（男声跑成女声、忽高忽低）。只用 numpy 自相关，够分辨大偏差。"""
     import numpy as np
@@ -409,12 +431,12 @@ def _rate_ok(dur, text, direction=""):
     return dur <= (0.6 if slow else 0.36) * n + 0.4      # +0.4 秒：短句前后的起音收尾和句中停顿（「有种，你就开枪」6 个字要 2.5 秒左右）
 
 
-def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction="", tag=""):
+def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction="", tag="", want_good=1):
     """录一句片中台词（10-18 定稿做法，用户认可的质量）：
     短句单独合成很不稳（吞字、走调、乱加词），所以把这句接在一段同情绪的「前文」后面一起合成（完整原声参考、wav 无损），
     再按逐字时间把这一句剪出来；每次都听写核对（读音一致、不多字）、查音高没漂，最多录 tries 次挑最好的。
     返回 (成功, 听写, 相似度, 说明)。"""
-    n = len(norm_zh(text)); best = None
+    n = len(norm_zh(text)); best = None; goods = []
     lead = (lead or "").strip()
     style = voice_style(sc, c) + (f"。这一句：{direction}" if direction else "")   # 10-19：只给人物描述、不给这句的情绪，念出来像机器人
     pre = f"({tag})" if tag else ""      # MiMo 官方逐句风格标签：写在要念的文字开头，不会被念出来
@@ -443,11 +465,16 @@ def say_line(pj, sc, sid, c, text, lead, dest, ref_f0=0.0, tries=6, direction=""
         drift = bool(ref_f0 and f0 and (f0 < ref_f0 * 0.7 or f0 > ref_f0 * 1.8))   # 喊叫、激动时音高自然升高，只有偏低 30% 或高到 1.8 倍才算漂（像换了个人）
         score = sim - (0.5 if extra else 0) - (0.3 if drift else 0) - (0.3 if not ends_ok else 0) - (0.3 if not rate_ok else 0)
         pj.log(f"对白 {sid} 第 {k + 1} 版：读音相似 {sim:.0%}{'，多字' if extra else ''}{'' if rate_ok else '，太慢'}，音高 {f0:.0f}Hz{'（漂了）' if drift else ''}，听写「{heard}」")
+        good = sim >= 0.95 and not extra and not drift and ends_ok and rate_ok
+        ex = expressiveness(cut) if good else 0.0
+        if good:
+            goods.append(ex)
+        score += 0.08 * ex                       # 合格的几版里挑语气起伏最大的（10-19：只挑第一版合格的，念得平）
         if best is None or score > best[0]:
             best = (score, cut, heard, sim, f0)
-        if sim >= 0.99 and not extra and not drift and ends_ok and rate_ok:
+        if len(goods) >= want_good:
             break
-    if not best or best[0] < 0.95:
+    if not best or best[3] < 0.95:
         return False, best[2] if best else "", best[3] if best else 0.0, "录不出合格的一版"
     sh("ffmpeg", "-v", "error", "-y", "-i", best[1], "-af", "loudnorm=I=-19:TP=-1.5", "-ar", "48000", "-ac", "1", dest, check=True)
     for f in os.listdir(pj.p("audio")):
@@ -546,7 +573,7 @@ def cmd_voice(pj, args):
         clean = pj.p("audio", f"{sid}_clean.wav")
         meta = pj.p("cast", f"voice_{c}_meta.json")
         ref_f0 = json.load(open(meta)).get("ref_f0", 0.0) if os.path.exists(meta) else 0.0
-        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0, direction=dl.get("direction", ""), tag=dl.get("tag", ""))
+        ok_tts, heard, sim, note = say_line(pj, sc, sid, c, tts_text(dl["text"]), line_lead(sc, s), clean, ref_f0, tries=8, direction=dl.get("direction", ""), tag=dl.get("tag", ""), want_good=3)
         if not ok_tts:
             fails.append(f"{sid} 录了 5 次都不合格（最后听写「{heard}」）"); continue
         lines[sid] = {"file": os.path.basename(clean), "dur": round(probe(clean)["dur"], 3), "speaker": c, "text": dl["text"],
@@ -843,7 +870,7 @@ def cmd_mix(pj, args):
     BED = {"rain": "anoisesrc=color=pink:amplitude=0.22:sample_rate=48000,highpass=f=350,lowpass=f=9000,volume=0.9[a];"
                    "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=180,volume=0.35[b];[a][b]amix=inputs=2:normalize=0",
            "street": "anoisesrc=color=brown:amplitude=0.3:sample_rate=48000,lowpass=f=260,volume=0.4",
-           "room": "anoisesrc=color=brown:amplitude=0.2:sample_rate=48000,lowpass=f=320,volume=0.9",   # 10-18：原来太低，停顿处像声音断了
+           "room": "anoisesrc=color=pink:amplitude=0.12:sample_rate=48000,highpass=f=180,lowpass=f=2500,volume=0.35",   # 10-19：原来是 320Hz 以下的低频棕噪，听着一直嗡嗡响；改成很轻的中频室内空气声
            "none": "anullsrc=r=48000:cl=mono"}
     parts = []
     for s in shots:

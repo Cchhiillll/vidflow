@@ -791,7 +791,7 @@ def cmd_mix(pj, args):
        "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium", video, check=True)
     # 2) 声音设计（10-18 教训：直接用视频模型自带的原声，会混进和画面无关的关门声、杂音）：
     #    环境底噪按场景程序合成（雨夜/街道/室内），全场统一、换场淡入淡出；
-    #    事件声只在分镜表 sfx 标了的镜头出现：clip=用这一镜片段自带的声音（画面就是这个事件，声画同步）、siren=合成警笛（可跨镜头，按 gain 由远到近）。
+    #    事件声只在分镜表 sfx 标了的镜头出现：clip=用这一镜片段自带的声音（画面就是这个事件，声画同步）、siren=合成警笛（可跨镜头，按 gain 由远到近）、punch=出拳击中、thud=倒地。
     def scene_amb(s):
         scn = next((x for x in sc.get("scenes") or [] if x["name"] == s.get("scene")), {})
         t_ = scn.get("ambience") or ("rain" if re.search(r"rain|雨", scn.get("look", ""), re.I) else "street" if re.search(r"street|街", scn.get("look", ""), re.I) else "room")
@@ -835,6 +835,12 @@ def cmd_mix(pj, args):
                    f"aevalsrc='0.5*sin(2*PI*900*t-250/0.45*cos(2*PI*0.45*t))':s=48000:d={dur:.3f}", "-af",
                    f"lowpass=f=2500,aecho=0.8:0.6:120:0.35,volume='{10 ** (g / 20):.4f}+({10 ** (g2 / 20):.4f}-{10 ** (g / 20):.4f})*t/{dur:.3f}':eval=frame,"
                    f"afade=t=in:d=1.0,afade=t=out:st={max(0, dur - 1.0):.2f}:d=1.0", "-ac", "2", src, check=True)
+            elif fx["type"] in ("punch", "thud"):       # 合成打击声（10-19 第2集出拳、倒地没有声音）：punch=短促闷响，thud=身体落地的低频闷响
+                g_ = 10 ** (g / 20)
+                expr = ("(0.9*sin(2*PI*90*t)*exp(-28*t)+0.6*(random(0)-0.5)*exp(-45*t))" if fx["type"] == "punch"
+                        else "(1.0*sin(2*PI*55*t)*exp(-9*t)+0.35*(random(0)-0.5)*exp(-14*t))")
+                sh("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"aevalsrc='{expr}':s=48000:d=0.6", "-af",
+                   f"lowpass=f={2500 if fx['type'] == 'punch' else 900},volume={g_:.3f}", "-ac", "2", src, check=True)
             else:
                 continue
             ms = int(st * 1000)
